@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "change-log-summary"
+version = "0.1.0"
+description = "AI-powered automated release notes generator"
+requires-python = ">=3.9"
+
+[project.scripts]
+change-log-summary = "release_notes_generator.cli:main"
