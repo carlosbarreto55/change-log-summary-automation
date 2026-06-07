@@ -1,0 +1,16 @@
+{
+  "modules": [
+    {
+      "name": "Pix",
+      "tags": ["Pix"]
+    },
+    {
+      "name": "GlobalLoyalty",
+      "tags": ["GlobalLoyalty"]
+    },
+    {
+      "name": "TransitOpenLoop",
+      "tags": ["TransitOpenLoop"]
+    }
+  ]
+}
