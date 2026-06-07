@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from release_notes_generator.paths import (
+    DEFAULT_AI_CONFIG_PATH,
     DEFAULT_MODULE_CONFIG_PATH,
     DEFAULT_RELEASE_MARKER_CONFIG_PATH,
     DEFAULT_USER_CONFIG_PATH,
@@ -37,6 +38,16 @@ class ReleaseMarkerConfig:
     """Release marker settings loaded from JSON configuration."""
 
     marker: str
+
+
+@dataclass(frozen=True)
+class AIConfig:
+    """AI API settings loaded from JSON configuration without secret values."""
+
+    api_url: str
+    model: str
+    api_key_env_var: str
+    prompt: str
 
 
 def load_user_config(config_path: Path = DEFAULT_USER_CONFIG_PATH) -> UserConfig:
@@ -85,6 +96,35 @@ def load_release_marker_config(
     if not isinstance(marker, str) or not marker:
         raise ConfigurationError("Release marker configuration must define a marker string.")
     return ReleaseMarkerConfig(marker=marker)
+
+
+def load_ai_config(config_path: Path = DEFAULT_AI_CONFIG_PATH) -> AIConfig:
+    """Load AI API settings from JSON while keeping secrets in the environment."""
+    data = _load_json_object(config_path)
+    if "api_key" in data:
+        raise ConfigurationError(
+            "AI configuration must reference api_key_env_var instead of storing api_key."
+        )
+
+    api_url = data.get("api_url")
+    model = data.get("model")
+    api_key_env_var = data.get("api_key_env_var")
+    prompt = data.get("prompt")
+    if not isinstance(api_url, str) or not api_url:
+        raise ConfigurationError("AI configuration must define an api_url string.")
+    if not isinstance(model, str) or not model:
+        raise ConfigurationError("AI configuration must define a model string.")
+    if not isinstance(api_key_env_var, str) or not api_key_env_var:
+        raise ConfigurationError("AI configuration must define an api_key_env_var string.")
+    if not isinstance(prompt, str) or not prompt:
+        raise ConfigurationError("AI configuration must define a prompt string.")
+
+    return AIConfig(
+        api_url=api_url,
+        model=model,
+        api_key_env_var=api_key_env_var,
+        prompt=prompt,
+    )
 
 
 def _load_json_object(config_path: Path) -> dict[str, Any]:

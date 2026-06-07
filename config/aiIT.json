@@ -1,0 +1,6 @@
+{
+  "api_url": "https://opencode.ai/zen/go/v1/chat/completions",
+  "model": "kimi-k2.6",
+  "api_key_env_var": "OPENCODE_GO_API_KEY",
+  "prompt": "Summarize the provided category-specific Git diff for release notes. Return a concise Markdown bullet list focused on user-visible changes."
+}
