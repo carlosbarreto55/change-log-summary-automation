@@ -65,6 +65,14 @@ Configured groups:
 - `Add` with tags `Add`, `add`
 - `Fix` with tags `Fix`, `fix`
 
+Current AI IT config:
+
+`config/aiIT.json`
+
+The AI IT config must not contain an API key. It may contain endpoint, model, prompt, and the environment variable name used to locate the key. The current live AI integration target is OpenCode Go using the OpenAI-compatible `https://opencode.ai/zen/go/v1/chat/completions` endpoint and the `kimi-k2.6` model.
+
+Local AI secrets must live outside version control, currently in `.env.local` or process environment.
+
 ## Current Integration Test Shape
 
 Keep one integration test for each independently testable workflow part and one integration test for the combined flow.
@@ -76,8 +84,21 @@ Current parts:
 - Extract a large commit range after the marker.
 - Filter commits by approved users and configured groups.
 - Run the combined extraction, filtering, grouping, and diff-size separation flow.
+- Optionally run live AI summarization against separated Redis diff payloads.
 
 Assertions should prefer stable thresholds and invariants over exact counts because the local Redis fixture can move forward over time.
+
+## Optional Live AI Integration
+
+Live AI integration tests must be skipped by default.
+
+To run live AI integration tests, set `RUN_LIVE_AI_IT=1` and `OPENCODE_GO_API_KEY` in process environment or the ignored `.env.local` file.
+
+When enabled, live AI integration tests must make real API requests through the configured AI API client. These tests must use Redis-derived diff payloads and write generated diff files, sanitized AI request payload assets, and AI reports only under `tests/assets/`.
+
+Before each live AI integration run, generated content under `tests/assets/` must be deleted so the run starts clean. The test must not delete `tests/assets/` at the end of a successful run; the directory should retain only the most recent run's generated diffs, request payload assets, and summaries for manual inspection.
+
+The API key must be read from the environment variable named by the AI config file. It must never be committed in JSON config, test files, source files, fixtures, or documentation.
 
 ## Future Full Workflow Assets
 
