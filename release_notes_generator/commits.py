@@ -108,6 +108,21 @@ def filter_commits(
     return tuple(accepted)
 
 
+def group_commit_hashes_by_module(
+    commits: Iterable[ClassifiedCommit],
+) -> dict[str, tuple[str, ...]]:
+    """Group accepted commit hashes by their classified module."""
+    grouped_hashes: dict[str, list[str]] = {}
+    for commit in commits:
+        grouped_hashes.setdefault(commit.module_name, []).append(commit.commit_hash)
+
+    return {
+        module_name: tuple(commit_hashes)
+        for module_name, commit_hashes in grouped_hashes.items()
+        if commit_hashes
+    }
+
+
 def _classify_module(
     subject: str,
     module_tags: Mapping[str, Iterable[str]],

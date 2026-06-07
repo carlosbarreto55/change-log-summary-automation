@@ -1,13 +1,19 @@
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
-from release_notes_generator.commits import GitCommitExtractor, filter_commits
+from release_notes_generator.commits import (
+    GitCommitExtractor,
+    filter_commits,
+    group_commit_hashes_by_module,
+)
 from release_notes_generator.configuration import (
     load_module_config,
     load_release_marker_config,
     load_user_config,
 )
+from release_notes_generator.diffs import generate_diff_files
 from release_notes_generator.paths import CONFIG_DIR, PROJECT_ROOT
 
 
@@ -15,6 +21,7 @@ REDIS_REPOSITORY_PATH = PROJECT_ROOT.parent / "redis"
 USER_IT_CONFIG_PATH = CONFIG_DIR / "userIT.json"
 MODULE_IT_CONFIG_PATH = CONFIG_DIR / "moduleIT.json"
 RELEASE_MARKER_IT_CONFIG_PATH = CONFIG_DIR / "releaseMarkerIT.json"
+ASSETS_DIR = PROJECT_ROOT / "tests" / "assets"
 
 
 class RedisWorkflowIntegrationTests(unittest.TestCase):
@@ -101,7 +108,8 @@ class RedisWorkflowIntegrationTests(unittest.TestCase):
             )
         )
 
-    def test_redis_workflow_extracts_filters_and_separates_large_diff_payloads(self) -> None:
+    def test_redis_workflow_extracts_filters_groups_and_writes_separated_diff_files(self) -> None:
+        _reset_assets_dir()
         release_marker_config = load_release_marker_config(RELEASE_MARKER_IT_CONFIG_PATH)
         user_config = load_user_config(USER_IT_CONFIG_PATH)
         module_config = load_module_config(MODULE_IT_CONFIG_PATH)
@@ -114,35 +122,33 @@ class RedisWorkflowIntegrationTests(unittest.TestCase):
             module_config.module_tags,
         )
 
-        grouped_hashes: dict[str, list[str]] = {module_name: [] for module_name in module_config.module_tags}
-        for commit in accepted_commits:
-            grouped_hashes[commit.module_name].append(commit.commit_hash)
+        try:
+            grouped_hashes = group_commit_hashes_by_module(accepted_commits)
+            generated_files = generate_diff_files(REDIS_REPOSITORY_PATH, grouped_hashes, ASSETS_DIR)
+            add_diff = generated_files["Add"].read_text(encoding="utf-8")
+            fix_diff = generated_files["Fix"].read_text(encoding="utf-8")
 
-        diff_sizes = {
-            module_name: _combined_diff_size(commit_hashes)
-            for module_name, commit_hashes in grouped_hashes.items()
-        }
+            self.assertEqual(set(generated_files), {"Add", "Fix"})
+            self.assertGreaterEqual(len(grouped_hashes["Add"]), 10)
+            self.assertGreaterEqual(len(grouped_hashes["Fix"]), 100)
+            self.assertGreater(generated_files["Add"].stat().st_size, 100_000)
+            self.assertGreater(generated_files["Fix"].stat().st_size, 500_000)
+            self.assertFalse(set(grouped_hashes["Add"]) & set(grouped_hashes["Fix"]))
+            self.assertIn(f"commit {grouped_hashes['Add'][0]}", add_diff)
+            self.assertNotIn(f"commit {grouped_hashes['Fix'][0]}", add_diff)
+            self.assertIn(f"commit {grouped_hashes['Fix'][0]}", fix_diff)
+            self.assertNotIn(f"commit {grouped_hashes['Add'][0]}", fix_diff)
+        finally:
+            _reset_assets_dir()
 
-        self.assertGreaterEqual(len(grouped_hashes["Add"]), 10)
-        self.assertGreaterEqual(len(grouped_hashes["Fix"]), 100)
-        self.assertGreater(diff_sizes["Add"], 100_000)
-        self.assertGreater(diff_sizes["Fix"], 500_000)
-        self.assertFalse(set(grouped_hashes["Add"]) & set(grouped_hashes["Fix"]))
 
-
-def _combined_diff_size(commit_hashes: list[str]) -> int:
-    size = 0
-    for commit_hash in commit_hashes:
-        result = subprocess.run(
-            ["git", "-C", str(REDIS_REPOSITORY_PATH), "show", "--format=fuller", commit_hash],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise AssertionError(result.stderr.strip() or f"git show failed for {commit_hash}")
-        size += len(result.stdout)
-    return size
+def _reset_assets_dir() -> None:
+    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    for path in ASSETS_DIR.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
 
 if __name__ == "__main__":
