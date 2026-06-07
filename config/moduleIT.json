@@ -1,0 +1,12 @@
+{
+  "modules": [
+    {
+      "name": "Add",
+      "tags": ["Add", "add"]
+    },
+    {
+      "name": "Fix",
+      "tags": ["Fix", "fix"]
+    }
+  ]
+}

@@ -4,6 +4,14 @@ This plan breaks the Release Notes Generator scope into TDD implementation phase
 
 Each checkbox indicates whether the phase or task has been completed.
 
+## Current Tooling State
+
+- [x] Create a project-local Python virtual environment at `.venv/`
+- [x] Ignore `.venv/` and local package metadata in Git
+- [x] Install the project in editable mode inside `.venv/`
+- [x] Run tests through `.venv/bin/python`
+- [x] Make the project script available through `.venv/bin/change-log-summary`
+
 ## TDD Workflow Rules
 
 - [ ] Write the class-level/unit tests for a behavior before implementing that behavior
@@ -11,6 +19,7 @@ Each checkbox indicates whether the phase or task has been completed.
 - [ ] Keep tests pending or skipped until their target class, module, or code path exists
 - [ ] After each implementation task, enable and run only the matching class-level tests first
 - [ ] Run context/integration tests only after the involved classes and workflow code exist
+- [x] Run all tests and project scripts through the project virtual environment
 
 ## Phase 1: Project Foundation
 
@@ -29,21 +38,31 @@ Each checkbox indicates whether the phase or task has been completed.
 
 ## Phase 2: JSON Configuration
 
-- [ ] Phase complete
-- [ ] Write class-level tests that approved users are loaded from the users JSON file
-- [ ] Write class-level tests that supported modules are loaded from the modules JSON file
-- [ ] Write class-level tests for missing or unreadable configuration files
-- [ ] Write pending context tests that changing JSON configuration changes filtering behavior without code changes
-- [ ] Create the users JSON configuration file
-- [ ] Define approved author emails or email-matching rules in the users JSON file
-- [ ] Create the modules JSON configuration file
-- [ ] Define supported module tags in the modules JSON file
-- [ ] Load the users JSON file from Python
-- [ ] Load the modules JSON file from Python
-- [ ] Validate that required configuration files exist before processing commits
-- [ ] Validate that users configuration is readable and usable for author filtering
-- [ ] Validate that modules configuration is readable and usable for commit classification
-- [ ] Enable and run the matching JSON configuration class-level tests
+- [x] Default JSON configuration scope complete
+- [x] Write class-level tests that approved users are loaded from the users JSON file
+- [x] Write class-level tests that supported modules are loaded from the modules JSON file
+- [x] Write class-level tests for missing or unreadable configuration files
+- [x] Create an empty integration test scaffold for future configuration-driven tests
+- [ ] Add integration test assertions that changing JSON configuration changes filtering behavior without code changes after filtering code exists
+- [x] Create the default users JSON configuration file: `config/user.json`
+- [x] Create the integration users JSON configuration file: `config/userIT.json`
+- [x] Define the default approved author email list in the users JSON files
+- [x] Create the default modules JSON configuration file: `config/module.json`
+- [x] Create the integration modules JSON configuration file: `config/moduleIT.json`
+- [x] Define supported module tags in the modules JSON files
+- [x] Create the default release marker JSON configuration file: `config/releaseMarker.json`
+- [x] Create the integration release marker JSON configuration file: `config/releaseMarkerIT.json`
+- [x] Define the default release marker in the release marker JSON files
+- [x] Load the default users JSON file from Python
+- [x] Load the default modules JSON file from Python
+- [x] Load the default release marker JSON file from Python
+- [x] Keep runtime code referencing only the default JSON configuration files
+- [x] Accept explicit configuration file paths in loader functions for test and future runtime use
+- [x] Validate that required configuration files exist before processing commits
+- [x] Validate that users configuration is readable and usable for author filtering
+- [x] Validate that modules configuration is readable and usable for commit classification
+- [x] Validate that release marker configuration is readable and usable for marker detection
+- [x] Enable and run the matching JSON configuration class-level tests through `.venv/bin/python -m unittest`
 
 ## Phase 3: Git Commit Extraction
 
