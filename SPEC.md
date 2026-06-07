@@ -42,11 +42,23 @@ Approved users and supported modules must be defined through JSON configuration 
 
 The script must use one JSON file for users and one JSON file for modules.
 
+The script runtime must accept a JSON configuration file path as a function parameter instead of relying on hard-coded project or test configuration.
+
 The users JSON file must define the approved author emails or email-matching rules used during author filtering.
 
 The modules JSON file must define the supported module tags used during commit classification.
 
 These files are required so tests and future changes can update filtering behavior without changing the Python implementation.
+
+The exact runtime configuration schema is out of scope for this spec, but the provided configuration file must be the source of runtime paths and filtering configuration.
+
+### Repository Synchronization
+
+All Git operations used by the main release notes flow must be performed locally through the Git CLI against the target repository.
+
+Before locating the latest `[Release]` marker or extracting commits, the script must synchronize the local target repository with its configured remote source.
+
+If repository synchronization fails, the script must stop before processing commits, generating temporary diff files, calling the AI API, or writing the final output.
 
 ### Commit Extraction
 
@@ -117,21 +129,24 @@ After the final Release Notes file is generated, the script must delete the temp
 
 ## Execution Flow
 
-1. Locate the last `[Release]` marker.
-2. Load approved users from the users JSON file.
-3. Load supported module tags from the modules JSON file.
-4. Capture all commits after that release marker.
-5. Filter commits by the approved users configuration.
-6. Parse commit message prefixes to classify commits by configured module tag.
-7. Discard commits from unauthorized authors or unmapped modules.
-8. Group accepted commit hashes by category.
-9. Generate temporary raw diff Markdown files per category using `git show <hash>`.
-10. Send each temporary diff file independently to the AI API.
-11. Receive standalone AI summaries for each category.
-12. Merge GlobalLoyalty and TransitOpenLoop summaries under `## Global Features`.
-13. Insert the Pix summary under `## Pix`.
-14. Export the final Release Notes Markdown file.
-15. Delete temporary diff Markdown files.
+1. Receive a runtime JSON configuration file path as a function parameter.
+2. Load runtime paths and filtering configuration from the provided JSON configuration file.
+3. Synchronize the local target repository using the Git CLI.
+4. Locate the last `[Release]` marker.
+5. Load approved users from the users JSON file.
+6. Load supported module tags from the modules JSON file.
+7. Capture all commits after that release marker.
+8. Filter commits by the approved users configuration.
+9. Parse commit message prefixes to classify commits by configured module tag.
+10. Discard commits from unauthorized authors or unmapped modules.
+11. Group accepted commit hashes by category.
+12. Generate temporary raw diff Markdown files per category using `git show <hash>`.
+13. Send each temporary diff file independently to the AI API.
+14. Receive standalone AI summaries for each category.
+15. Merge GlobalLoyalty and TransitOpenLoop summaries under `## Global Features`.
+16. Insert the Pix summary under `## Pix`.
+17. Export the final Release Notes Markdown file.
+18. Delete temporary diff Markdown files.
 
 ## Acceptance Criteria
 
@@ -139,7 +154,10 @@ After the final Release Notes file is generated, the script must delete the temp
 - Commits from unmapped modules are not processed.
 - Approved users are loaded from a users JSON file.
 - Supported modules are loaded from a modules JSON file.
+- Runtime paths and filtering configuration are loaded from a JSON configuration file path passed as a function parameter.
 - Filtering behavior can be changed by updating the JSON configuration files without changing the Python code.
+- The target repository is synchronized locally through the Git CLI before release-marker detection or commit extraction.
+- Processing stops without generated output if repository synchronization fails.
 - Temporary diff files contain only strictly filtered code diffs.
 - AI API requests are split by category to respect token limits.
 - No AI API request contains unrelated module diffs.
@@ -153,5 +171,5 @@ After the final Release Notes file is generated, the script must delete the temp
 - Selecting a specific AI provider or model
 - Defining the exact prompt text sent to the AI API
 - Defining the final Release Notes file name
-- Defining command-line arguments or configuration file format
+- Defining command-line arguments or the exact runtime configuration file schema
 - Defining retry, rate-limit, or authentication behavior for the AI API
