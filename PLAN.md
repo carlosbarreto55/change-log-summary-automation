@@ -16,11 +16,11 @@ Each checkbox indicates whether the phase or task has been completed.
 - [x] AI summarization is implemented in `release_notes_generator/summarization.py`
 - [x] Unit tests cover project structure, CLI entry point, configuration loading, Git extraction, and filtering
 - [x] Unit and context tests cover grouping, diff file generation, and AI summarization with mocked clients
-- [x] Redis integration tests follow `tests/integration/PROTOCOL.md` and cover IT configuration loading, marker detection, large commit extraction, filtering, runtime grouping, generated diff-file separation, and optional live AI summarization
+- [x] Redis integration tests follow `tests/integration/PROTOCOL.md` and cover IT configuration loading, marker detection, large commit extraction, filtering, runtime grouping, generated diff-file separation, full workflow orchestration, cleanup, and optional live AI summarization
 - [x] Local secrets are read from ignored `.env.local`; AI JSON config stores only an environment variable name, endpoint, model, and prompt
-- [ ] `ReleaseNotesWorkflow.run()` still raises `NotImplementedError`
-- [ ] Target repository synchronization is specified but not implemented
-- [ ] Full-workflow composition integration and cleanup remain unimplemented
+- [x] `ReleaseNotesWorkflow.run()` executes the end-to-end CLI workflow from a runtime JSON config
+- [x] Target repository synchronization is implemented as `git fetch --prune` plus `git rebase @{u}`
+- [x] Full-workflow composition integration and cleanup are implemented
 
 ## Current Tooling State
 
@@ -76,23 +76,23 @@ Each checkbox indicates whether the phase or task has been completed.
 - [x] Load the default release marker JSON file from Python
 - [x] Keep runtime code referencing only the default JSON configuration files
 - [x] Accept explicit configuration file paths in loader functions for test and future runtime use
-- [ ] Accept a single runtime workflow configuration file path for full workflow execution
+- [x] Accept a single runtime workflow configuration file path for full workflow execution
 - [x] Validate that required configuration files exist before processing commits
 - [x] Validate that users configuration is readable and usable for author filtering
 - [x] Validate that modules configuration is readable and usable for commit classification
 - [x] Validate that release marker configuration is readable and usable for marker detection
 - [x] Enable and run the matching JSON configuration class-level tests through `.venv/bin/python -m unittest`
 
-## Required Future Scope: Repository Synchronization
+## Repository Synchronization
 
-- [ ] Write class-level tests that target repository synchronization runs before release-marker detection
-- [ ] Write class-level tests that synchronization failures stop all later processing
-- [ ] Implement local target repository synchronization through the Git CLI
-- [ ] Ensure commit extraction does not run after repository synchronization failure
-- [ ] Ensure temporary diff generation does not run after repository synchronization failure
-- [ ] Ensure AI API calls do not run after repository synchronization failure
-- [ ] Ensure final output writing does not run after repository synchronization failure
-- [ ] Add integration coverage using the protocol Redis fixture after runtime synchronization exists
+- [x] Write class-level tests that target repository synchronization runs before release-marker detection
+- [x] Write class-level tests that synchronization failures stop all later processing
+- [x] Implement local target repository synchronization through the Git CLI
+- [x] Ensure commit extraction does not run after repository synchronization failure
+- [x] Ensure temporary diff generation does not run after repository synchronization failure
+- [x] Ensure AI API calls do not run after repository synchronization failure
+- [x] Ensure final output writing does not run after repository synchronization failure
+- [x] Add integration coverage using the protocol Redis fixture after runtime synchronization exists
 
 ## Phase 3: Git Commit Extraction
 
@@ -185,11 +185,11 @@ Each checkbox indicates whether the phase or task has been completed.
 
 ## Phase 8: Final Release Notes Composition
 
-- [ ] Phase complete
+- [x] Phase complete
 - [x] Write class-level tests that the final Markdown file contains `## Global Features`
 - [x] Write class-level tests that the final Markdown file contains `## Pix`
 - [x] Write class-level tests for merging GlobalLoyalty and TransitOpenLoop summaries under `## Global Features`
-- [ ] Write context tests for exporting the final output as a single `.md` file
+- [x] Write context tests for exporting the final output as a single `.md` file
 - [x] Create the final Markdown Release Notes document
 - [x] Add a `## Global Features` section
 - [x] Merge the GlobalLoyalty summary under `## Global Features`
@@ -198,28 +198,28 @@ Each checkbox indicates whether the phase or task has been completed.
 - [x] Insert the Pix summary under `## Pix`
 - [x] Export the final output as a single `.md` file
 - [x] Enable and run the matching release notes composition class-level tests
-- [ ] Run the final output context tests after export code exists
+- [x] Run the final output context tests after export code exists
 
 ## Phase 9: Cleanup
 
-- [ ] Phase complete
-- [ ] Write class-level tests that temporary diff files are deleted after generation
-- [ ] Write class-level tests that the final Release Notes file remains after cleanup
-- [ ] Write context tests for cleanup at the end of the full workflow
-- [ ] Delete the temporary Pix diff Markdown file after final output generation
-- [ ] Delete the temporary GlobalLoyalty diff Markdown file after final output generation
-- [ ] Delete the temporary TransitOpenLoop diff Markdown file after final output generation
-- [ ] Ensure the final Release Notes file remains after cleanup
-- [ ] Enable and run the matching cleanup class-level tests
-- [ ] Run the cleanup context tests after the full workflow code exists
+- [x] Phase complete
+- [x] Write class-level tests that temporary diff files are deleted after generation
+- [x] Write class-level tests that the final Release Notes file remains after cleanup
+- [x] Write context tests for cleanup at the end of the full workflow
+- [x] Delete the temporary Pix diff Markdown file after final output generation
+- [x] Delete the temporary GlobalLoyalty diff Markdown file after final output generation
+- [x] Delete the temporary TransitOpenLoop diff Markdown file after final output generation
+- [x] Ensure the final Release Notes file remains after cleanup
+- [x] Enable and run the matching cleanup class-level tests
+- [x] Run the cleanup context tests after the full workflow code exists
 
 ## Phase 10: Full TDD Verification
 
-- [ ] Phase complete
-- [ ] Run the complete class-level/unit test suite
-- [ ] Run the complete context/integration test suite
-- [ ] Confirm every behavior listed in this plan has a test written before its implementation task
-- [ ] Confirm no context/integration test is required before all involved classes and workflow code exist
-- [ ] Confirm pending or skipped tests are either implemented or explicitly documented for future scope
-- [ ] Keep future integration tests aligned with `tests/integration/PROTOCOL.md`
-- [ ] Add full-workflow verification after `ReleaseNotesWorkflow.run()` is implemented
+- [x] Phase complete
+- [x] Run the complete class-level/unit test suite
+- [x] Run the complete context/integration test suite
+- [x] Confirm every behavior listed in this plan has a test written before its implementation task
+- [x] Confirm no context/integration test is required before all involved classes and workflow code exist
+- [x] Confirm pending or skipped tests are either implemented or explicitly documented for future scope
+- [x] Keep future integration tests aligned with `tests/integration/PROTOCOL.md`
+- [x] Add full-workflow verification after `ReleaseNotesWorkflow.run()` is implemented

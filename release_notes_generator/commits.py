@@ -15,6 +15,12 @@ class GitHistoryError(RuntimeError):
     """Raised when Git history cannot be read for release note generation."""
 
 
+def synchronize_repository(repository_path: Path) -> None:
+    """Synchronize the local target repository before release analysis."""
+    _run_git_command(repository_path, ["fetch", "--prune"])
+    _run_git_command(repository_path, ["rebase", "@{u}"])
+
+
 @dataclass(frozen=True)
 class GitCommit:
     """A commit extracted from Git history."""
@@ -66,17 +72,7 @@ class GitCommitExtractor:
         return tuple(_parse_commit_line(line) for line in output.splitlines() if line)
 
     def _run_git(self, args: list[str]) -> str:
-        command = ["git", "-C", str(self._repository_path), *args]
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip() or "Git command failed."
-            raise GitHistoryError(message)
-        return result.stdout
+        return _run_git_command(self._repository_path, args)
 
 
 def filter_commits(
@@ -143,3 +139,17 @@ def _split_git_fields(line: str, expected_fields: int) -> list[str]:
     if len(fields) != expected_fields:
         raise GitHistoryError(f"Unexpected Git log output: {line}")
     return fields
+
+
+def _run_git_command(repository_path: Path, args: list[str]) -> str:
+    command = ["git", "-C", str(Path(repository_path)), *args]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "Git command failed."
+        raise GitHistoryError(message)
+    return result.stdout
