@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from release_notes_generator.diffs import DiffGenerationError, generate_diff_files
+from release_notes_generator.diffs import DiffGenerationError, delete_diff_files, generate_diff_files
 
 
 class DiffGenerationTests(unittest.TestCase):
@@ -91,6 +91,18 @@ class DiffGenerationTests(unittest.TestCase):
 
                 with self.assertRaises(DiffGenerationError):
                     generate_diff_files(Path("/repo"), {"Pix": ("missing",)}, Path(temp_dir))
+
+    def test_delete_diff_files_removes_generated_files_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diff_file = Path(temp_dir) / "diff_pix.md"
+            other_file = Path(temp_dir) / "manual-note.md"
+            diff_file.write_text("temporary diff", encoding="utf-8")
+            other_file.write_text("keep", encoding="utf-8")
+
+            delete_diff_files((diff_file, Path(temp_dir) / "already-deleted.md"))
+
+            self.assertFalse(diff_file.exists())
+            self.assertTrue(other_file.exists())
 
 
 if __name__ == "__main__":

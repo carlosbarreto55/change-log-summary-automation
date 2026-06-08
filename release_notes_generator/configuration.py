@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from release_notes_generator.paths import (
     DEFAULT_AI_CONFIG_PATH,
@@ -48,6 +48,46 @@ class AIConfig:
     model: str
     api_key_env_var: str
     prompt: str
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """End-to-end workflow paths loaded from one runtime JSON file."""
+
+    repository_path: Path
+    user_config_path: Path
+    module_config_path: Path
+    release_marker_config_path: Path
+    ai_config_path: Path
+    temp_diff_dir: Path
+    output_path: Path
+    env_file_path: Optional[Path] = None
+
+
+def load_runtime_config(config_path: Path) -> RuntimeConfig:
+    """Load the end-to-end workflow configuration from one JSON file."""
+    path = Path(config_path).expanduser()
+    data = _load_json_object(path)
+    base_dir = path.resolve(strict=False).parent
+
+    output_path = _required_path(data, "output_path", base_dir)
+    if output_path.suffix.lower() != ".md":
+        raise ConfigurationError("Runtime configuration output_path must be a .md file.")
+
+    return RuntimeConfig(
+        repository_path=_required_path(data, "repository_path", base_dir),
+        user_config_path=_required_path(data, "user_config_path", base_dir),
+        module_config_path=_required_path(data, "module_config_path", base_dir),
+        release_marker_config_path=_required_path(
+            data,
+            "release_marker_config_path",
+            base_dir,
+        ),
+        ai_config_path=_required_path(data, "ai_config_path", base_dir),
+        temp_diff_dir=_required_path(data, "temp_diff_dir", base_dir),
+        output_path=output_path,
+        env_file_path=_optional_path(data, "env_file_path", base_dir),
+    )
 
 
 def load_user_config(config_path: Path = DEFAULT_USER_CONFIG_PATH) -> UserConfig:
@@ -144,3 +184,30 @@ def _load_json_object(config_path: Path) -> dict[str, Any]:
 
 def _is_string_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _required_path(data: Mapping[str, Any], field_name: str, base_dir: Path) -> Path:
+    value = data.get(field_name)
+    if not isinstance(value, str) or not value:
+        raise ConfigurationError(
+            f"Runtime configuration must define {field_name} as a string."
+        )
+    return _resolve_path(value, base_dir)
+
+
+def _optional_path(data: Mapping[str, Any], field_name: str, base_dir: Path) -> Optional[Path]:
+    value = data.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ConfigurationError(
+            f"Runtime configuration {field_name} must be a string when provided."
+        )
+    return _resolve_path(value, base_dir)
+
+
+def _resolve_path(value: str, base_dir: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve(strict=False)
+    return (base_dir / path).resolve(strict=False)

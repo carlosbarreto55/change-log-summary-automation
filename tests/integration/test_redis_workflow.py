@@ -15,13 +15,24 @@ from release_notes_generator.configuration import (
 )
 from release_notes_generator.diffs import generate_diff_files
 from release_notes_generator.paths import CONFIG_DIR, PROJECT_ROOT
+from release_notes_generator.workflow import ReleaseNotesWorkflow
 
 
 REDIS_REPOSITORY_PATH = PROJECT_ROOT.parent / "redis"
 USER_IT_CONFIG_PATH = CONFIG_DIR / "userIT.json"
 MODULE_IT_CONFIG_PATH = CONFIG_DIR / "moduleIT.json"
 RELEASE_MARKER_IT_CONFIG_PATH = CONFIG_DIR / "releaseMarkerIT.json"
+WORKFLOW_REDIS_IT_CONFIG_PATH = CONFIG_DIR / "workflowRedisIT.json"
 ASSETS_DIR = PROJECT_ROOT / "tests" / "assets"
+
+
+class RecordingSummaryClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def summarize(self, module_name: str, diff_content: str) -> str:
+        self.calls.append((module_name, diff_content))
+        return f"- Summary for {module_name}"
 
 
 class RedisWorkflowIntegrationTests(unittest.TestCase):
@@ -141,10 +152,44 @@ class RedisWorkflowIntegrationTests(unittest.TestCase):
         finally:
             _reset_assets_dir()
 
+    def test_redis_full_workflow_generates_single_output_and_cleans_temporary_diffs(self) -> None:
+        _reset_assets_dir()
+        client = RecordingSummaryClient()
+
+        try:
+            with unittest.mock.patch(
+                "release_notes_generator.workflow.synchronize_repository"
+            ) as synchronize:
+                result = ReleaseNotesWorkflow(summary_client=client).run(
+                    WORKFLOW_REDIS_IT_CONFIG_PATH
+                )
+
+            output_path = ASSETS_DIR / "release_notes.md"
+            output = output_path.read_text(encoding="utf-8")
+            generated_files = tuple(ASSETS_DIR.rglob("*"))
+            generated_file_paths = tuple(
+                path for path in generated_files if path.is_file() and path.name != ".gitkeep"
+            )
+            remaining_diff_files = tuple(ASSETS_DIR.rglob("diff_*.md"))
+
+            self.assertEqual(result, 0)
+            synchronize.assert_called_once_with(REDIS_REPOSITORY_PATH)
+            self.assertEqual({module_name for module_name, _ in client.calls}, {"Add", "Fix"})
+            self.assertTrue(all("commit " in diff_content for _, diff_content in client.calls))
+            self.assertTrue(output_path.is_file())
+            self.assertEqual(generated_file_paths, (output_path,))
+            self.assertEqual(remaining_diff_files, ())
+            self.assertIn("## Global Features", output)
+            self.assertIn("## Pix", output)
+        finally:
+            _reset_assets_dir()
+
 
 def _reset_assets_dir() -> None:
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     for path in ASSETS_DIR.iterdir():
+        if path.name == ".gitkeep":
+            continue
         if path.is_dir():
             shutil.rmtree(path)
         else:

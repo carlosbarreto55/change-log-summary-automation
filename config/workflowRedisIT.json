@@ -1,0 +1,10 @@
+{
+  "repository_path": "../../redis",
+  "user_config_path": "userIT.json",
+  "module_config_path": "moduleIT.json",
+  "release_marker_config_path": "releaseMarkerIT.json",
+  "ai_config_path": "aiIT.json",
+  "temp_diff_dir": "../tests/assets/diffs",
+  "output_path": "../tests/assets/release_notes.md",
+  "env_file_path": "../.env.local"
+}

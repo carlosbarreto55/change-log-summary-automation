@@ -36,6 +36,18 @@ def generate_diff_files(
     return generated_files
 
 
+def delete_diff_files(diff_files: Iterable[Path]) -> None:
+    """Delete generated temporary diff files while leaving other files untouched."""
+    for diff_file_path in diff_files:
+        path = Path(diff_file_path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise DiffGenerationError(f"Unable to delete temporary diff file: {path}") from exc
+
+
 def _git_show(repository_path: Path, commit_hash: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repository_path), "show", commit_hash],

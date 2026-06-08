@@ -72,7 +72,7 @@ This design avoids sending the full repository history to AI. Only locally filte
 
 ## Current Status
 
-The project currently includes tested building blocks for:
+The project now includes a CLI-driven end-to-end workflow for:
 
 - JSON configuration loading.
 - Git commit extraction and filtering.
@@ -80,8 +80,9 @@ The project currently includes tested building blocks for:
 - Category-specific diff generation.
 - AI summarization.
 - Final Markdown composition.
+- Temporary diff cleanup after successful output generation.
 
-The full end-to-end workflow runner is still under development. The existing modules are tested independently and are being assembled incrementally into the complete release-notes workflow.
+The workflow is executed from a single runtime JSON configuration file passed to the CLI.
 
 ## Requirements
 
@@ -102,10 +103,8 @@ python3 -m venv .venv
 The project exposes a console script:
 
 ```bash
-change-log-summary
+change-log-summary --config path/to/workflow.json
 ```
-
-The complete runtime command flow is still being implemented, so most behavior is currently exercised through the package modules and tests.
 
 ## Configuration
 
@@ -119,6 +118,32 @@ The project supports configuration for:
 - AI endpoint, model, prompt, and API key environment variable name.
 
 AI configuration must not store secret values. Store only the environment variable name that contains the key.
+
+The CLI requires one runtime workflow JSON file. Relative paths are resolved from the directory containing that runtime JSON file.
+
+Example runtime workflow configuration:
+
+```json
+{
+  "repository_path": "/absolute/path/to/target/repository",
+  "user_config_path": "user.json",
+  "module_config_path": "module.json",
+  "release_marker_config_path": "releaseMarker.json",
+  "ai_config_path": "ai.json",
+  "temp_diff_dir": "../tmp/diffs",
+  "output_path": "../output/release_notes.md",
+  "env_file_path": "../.env.local"
+}
+```
+
+Before reading release history, the workflow runs:
+
+```bash
+git -C <repository_path> fetch --prune
+git -C <repository_path> rebase @{u}
+```
+
+If synchronization fails, processing stops before commit extraction, diff generation, AI requests, or output writing.
 
 Example AI configuration shape:
 
@@ -196,7 +221,7 @@ release_notes_generator/
   diffs.py            Category-specific diff file generation
   summarization.py    AI summarization client and diff summarization flow
   composition.py      Final Markdown release-notes composition
-  workflow.py         Workflow skeleton
+  workflow.py         End-to-end workflow orchestration
 
 tests/
   unit/               Class-level and module-level tests
@@ -208,9 +233,6 @@ tests/
 
 Planned work includes:
 
-- Complete runtime workflow orchestration.
-- Repository synchronization before release analysis.
-- Final cleanup of temporary diff files after output generation.
 - End-to-end workflow verification.
 - Public release packaging and documented license terms.
 

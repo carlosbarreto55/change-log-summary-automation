@@ -8,10 +8,48 @@ from release_notes_generator.commits import (
     GitCommitExtractor,
     GitHistoryError,
     filter_commits,
+    synchronize_repository,
 )
 
 
 class GitCommitExtractorTests(unittest.TestCase):
+    def test_synchronize_repository_fetches_and_rebases_before_analysis(self) -> None:
+        with patch("release_notes_generator.commits.subprocess.run") as run:
+            run.side_effect = [
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            ]
+
+            synchronize_repository(Path("/repo"))
+
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [
+                ["git", "-C", "/repo", "fetch", "--prune"],
+                ["git", "-C", "/repo", "rebase", "@{u}"],
+            ],
+        )
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["capture_output"], True)
+            self.assertEqual(call.kwargs["text"], True)
+            self.assertEqual(call.kwargs["check"], False)
+
+    def test_synchronize_repository_stops_when_fetch_fails(self) -> None:
+        with patch("release_notes_generator.commits.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="fetch failed"
+            )
+
+            with self.assertRaises(GitHistoryError):
+                synchronize_repository(Path("/repo"))
+
+        run.assert_called_once_with(
+            ["git", "-C", "/repo", "fetch", "--prune"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_detects_latest_release_marker_in_git_history(self) -> None:
         extractor = GitCommitExtractor(Path("/repo"))
 

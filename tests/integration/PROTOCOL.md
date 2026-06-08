@@ -73,6 +73,12 @@ The AI IT config must not contain an API key. It may contain endpoint, model, pr
 
 Local AI secrets must live outside version control, currently in `.env.local` or process environment.
 
+Current full workflow IT config:
+
+`config/workflowRedisIT.json`
+
+The full workflow IT config must reference the Redis fixture and the Redis `*IT.json` files. Generated full-workflow artifacts must remain under `tests/assets/`.
+
 ## Current Integration Test Shape
 
 Keep one integration test for each independently testable workflow part and one integration test for the combined flow.
@@ -84,6 +90,7 @@ Current parts:
 - Extract a large commit range after the marker.
 - Filter commits by approved users and configured groups.
 - Run the combined extraction, filtering, grouping, and diff-size separation flow.
+- Run the full workflow through `ReleaseNotesWorkflow.run()` using `config/workflowRedisIT.json`, with AI summarization mocked and repository synchronization mocked to avoid mutating the externally managed Redis fixture.
 - Optionally run live AI summarization against separated Redis diff payloads.
 
 Assertions should prefer stable thresholds and invariants over exact counts because the local Redis fixture can move forward over time.
@@ -109,3 +116,5 @@ When the full workflow integration test is created after all features are implem
 Before each full workflow integration test run, every generated file and directory inside `tests/assets/` must be deleted so the test starts from a clean asset directory.
 
 The integration test may recreate `tests/assets/` if it does not exist. The directory is for temporary test artifacts only and should not be used as a source of expected golden files unless that is explicitly decided later.
+
+Full workflow integration tests must not leave temporary diff files behind after a successful run. They may leave the final generated release-notes Markdown file long enough to assert its contents, then clean it up before the test exits.
