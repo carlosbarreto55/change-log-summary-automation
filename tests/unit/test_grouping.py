@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from release_notes_generator.commits import ClassifiedCommit, group_commit_hashes_by_module
 
@@ -6,10 +7,10 @@ from release_notes_generator.commits import ClassifiedCommit, group_commit_hashe
 class CommitGroupingTests(unittest.TestCase):
     def test_groups_accepted_commit_hashes_by_module_category(self) -> None:
         commits = (
-            ClassifiedCommit("pix1", "dev@example.com", "Pix: add payment", "Pix"),
-            ClassifiedCommit("gl1", "dev@example.com", "GlobalLoyalty: add reward", "GlobalLoyalty"),
-            ClassifiedCommit("pix2", "dev@example.com", "Pix: add refund", "Pix"),
-            ClassifiedCommit("tol1", "dev@example.com", "TransitOpenLoop: add fare", "TransitOpenLoop"),
+            _commit("pix1", "Pix: add payment", "Pix"),
+            _commit("gl1", "GlobalLoyalty: add reward", "GlobalLoyalty"),
+            _commit("pix2", "Pix: add refund", "Pix"),
+            _commit("tol1", "TransitOpenLoop: add fare", "TransitOpenLoop"),
         )
 
         groups = group_commit_hashes_by_module(commits)
@@ -27,6 +28,16 @@ class CommitGroupingTests(unittest.TestCase):
         groups = group_commit_hashes_by_module(())
 
         self.assertEqual(groups, {})
+
+
+def _commit(commit_hash: str, subject: str, module_name: str) -> ClassifiedCommit:
+    return ClassifiedCommit(
+        commit_hash,
+        "dev@example.com",
+        subject,
+        module_name,
+        datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+    )
 
 
 if __name__ == "__main__":

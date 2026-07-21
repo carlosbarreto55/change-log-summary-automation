@@ -1,5 +1,6 @@
 import subprocess
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,9 @@ from release_notes_generator.commits import (
     filter_commits,
     synchronize_repository,
 )
+
+
+TEST_TIMESTAMP = datetime(2026, 1, 3, 12, 30, tzinfo=timezone.utc)
 
 
 class GitCommitExtractorTests(unittest.TestCase):
@@ -143,7 +147,12 @@ class GitCommitExtractorTests(unittest.TestCase):
                 subprocess.CompletedProcess(
                     args=[],
                     returncode=0,
-                    stdout="a1\x1fdev@example.com\x1fPix: add payment\nb2\x1fdev@example.com\x1fGlobalLoyalty: add rewards\n",
+                    stdout=(
+                        "a1\x1fdev@example.com\x1f2026-01-03T09:30:00-03:00"
+                        "\x1fPix: add payment\n"
+                        "b2\x1fdev@example.com\x1f2026-01-04T12:00:00Z"
+                        "\x1fGlobalLoyalty: add rewards\n"
+                    ),
                     stderr="",
                 ),
             ]
@@ -153,8 +162,18 @@ class GitCommitExtractorTests(unittest.TestCase):
         self.assertEqual(
             commits,
             (
-                GitCommit("a1", "dev@example.com", "Pix: add payment"),
-                GitCommit("b2", "dev@example.com", "GlobalLoyalty: add rewards"),
+                GitCommit(
+                    "a1",
+                    "dev@example.com",
+                    "Pix: add payment",
+                    datetime.fromisoformat("2026-01-03T09:30:00-03:00"),
+                ),
+                GitCommit(
+                    "b2",
+                    "dev@example.com",
+                    "GlobalLoyalty: add rewards",
+                    datetime.fromisoformat("2026-01-04T12:00:00+00:00"),
+                ),
             ),
         )
         run.assert_called_with(
@@ -164,7 +183,7 @@ class GitCommitExtractorTests(unittest.TestCase):
                 "/repo",
                 "log",
                 "--reverse",
-                "--format=%H%x1f%ae%x1f%s",
+                "--format=%H%x1f%ae%x1f%aI%x1f%s",
                 "release..HEAD",
             ],
             capture_output=True,
@@ -184,7 +203,10 @@ class GitCommitExtractorTests(unittest.TestCase):
                 subprocess.CompletedProcess(
                     args=[],
                     returncode=0,
-                    stdout="included\x1fdev@example.com\x1fPix: included\n",
+                    stdout=(
+                        "included\x1fdev@example.com\x1f2026-01-03T12:30:00+00:00"
+                        "\x1fPix: included\n"
+                    ),
                     stderr="",
                 ),
             ]
@@ -193,7 +215,14 @@ class GitCommitExtractorTests(unittest.TestCase):
 
         self.assertEqual(
             commits,
-            (GitCommit("included", "dev@example.com", "Pix: included"),),
+            (
+                GitCommit(
+                    "included",
+                    "dev@example.com",
+                    "Pix: included",
+                    TEST_TIMESTAMP,
+                ),
+            ),
         )
         self.assertEqual(
             run.call_args_list[1].args[0][-1],
@@ -215,6 +244,28 @@ class GitCommitExtractorTests(unittest.TestCase):
 
         self.assertEqual(commits, ())
 
+    def test_raises_when_author_timestamp_is_malformed(self) -> None:
+        extractor = GitCommitExtractor(Path("/repo"))
+
+        with patch("release_notes_generator.commits.subprocess.run") as run:
+            run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="release\x1f[Release]\n", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout="a1\x1fdev@example.com\x1fnot-a-timestamp\x1fPix: change\n",
+                    stderr="",
+                ),
+            ]
+
+            with self.assertRaisesRegex(
+                GitHistoryError,
+                "Unexpected Git author timestamp",
+            ):
+                extractor.commits_after_latest_release_marker("[Release]")
+
     def test_raises_when_no_release_marker_exists(self) -> None:
         extractor = GitCommitExtractor(Path("/repo"))
 
@@ -230,8 +281,8 @@ class GitCommitExtractorTests(unittest.TestCase):
 class CommitFilteringTests(unittest.TestCase):
     def test_unauthorized_authors_are_ignored(self) -> None:
         commits = (
-            GitCommit("a1", "approved@example.com", "Pix: add payment"),
-            GitCommit("b2", "unknown@example.com", "Pix: add refund"),
+            GitCommit("a1", "approved@example.com", "Pix: add payment", TEST_TIMESTAMP),
+            GitCommit("b2", "unknown@example.com", "Pix: add refund", TEST_TIMESTAMP),
         )
 
         accepted = filter_commits(
@@ -245,8 +296,8 @@ class CommitFilteringTests(unittest.TestCase):
 
     def test_unmapped_modules_are_ignored(self) -> None:
         commits = (
-            GitCommit("a1", "approved@example.com", "Pix: add payment"),
-            GitCommit("b2", "approved@example.com", "Unknown: add feature"),
+            GitCommit("a1", "approved@example.com", "Pix: add payment", TEST_TIMESTAMP),
+            GitCommit("b2", "approved@example.com", "Unknown: add feature", TEST_TIMESTAMP),
         )
 
         accepted = filter_commits(
@@ -260,8 +311,8 @@ class CommitFilteringTests(unittest.TestCase):
 
     def test_commit_message_prefixes_are_matched_against_module_tags(self) -> None:
         commits = (
-            GitCommit("a1", "approved@example.com", "PIX-123 add payment"),
-            GitCommit("b2", "approved@example.com", "GL-456 add rewards"),
+            GitCommit("a1", "approved@example.com", "PIX-123 add payment", TEST_TIMESTAMP),
+            GitCommit("b2", "approved@example.com", "GL-456 add rewards", TEST_TIMESTAMP),
         )
 
         accepted = filter_commits(
@@ -274,8 +325,12 @@ class CommitFilteringTests(unittest.TestCase):
 
     def test_author_email_and_commit_prefix_matching_are_case_sensitive(self) -> None:
         commits = (
-            GitCommit("email-case", "Approved@example.com", "Pix: email case"),
-            GitCommit("prefix-case", "approved@example.com", "pix: prefix case"),
+            GitCommit(
+                "email-case", "Approved@example.com", "Pix: email case", TEST_TIMESTAMP
+            ),
+            GitCommit(
+                "prefix-case", "approved@example.com", "pix: prefix case", TEST_TIMESTAMP
+            ),
         )
 
         accepted = filter_commits(
@@ -287,7 +342,9 @@ class CommitFilteringTests(unittest.TestCase):
         self.assertEqual(accepted, ())
 
     def test_first_configured_matching_module_wins(self) -> None:
-        commits = (GitCommit("a1", "approved@example.com", "Feature: add payment"),)
+        commits = (
+            GitCommit("a1", "approved@example.com", "Feature: add payment", TEST_TIMESTAMP),
+        )
 
         accepted = filter_commits(
             commits,
@@ -298,7 +355,14 @@ class CommitFilteringTests(unittest.TestCase):
         self.assertEqual(accepted[0].module_name, "Broad")
 
     def test_filter_returns_classified_commits_for_authorized_mapped_commits(self) -> None:
-        commits = (GitCommit("a1", "approved@example.com", "TransitOpenLoop: add fare"),)
+        commits = (
+            GitCommit(
+                "a1",
+                "approved@example.com",
+                "TransitOpenLoop: add fare",
+                TEST_TIMESTAMP,
+            ),
+        )
 
         accepted = filter_commits(
             commits,
@@ -310,6 +374,7 @@ class CommitFilteringTests(unittest.TestCase):
         self.assertEqual(accepted[0].author_email, "approved@example.com")
         self.assertEqual(accepted[0].subject, "TransitOpenLoop: add fare")
         self.assertEqual(accepted[0].module_name, "TransitOpenLoop")
+        self.assertEqual(accepted[0].authored_at, TEST_TIMESTAMP)
 
 
 if __name__ == "__main__":

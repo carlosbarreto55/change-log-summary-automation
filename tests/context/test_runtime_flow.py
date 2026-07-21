@@ -1,11 +1,13 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from release_notes_generator.commits import GitCommit, GitHistoryError
 from release_notes_generator.configuration import ConfigurationError
+from release_notes_generator.pdf_export import export_release_pdf
 from release_notes_generator.workflow import ReleaseNotesWorkflow
 
 
@@ -52,6 +54,7 @@ class RuntimeFlowTests(unittest.TestCase):
             runtime_config_path = _write_runtime_configuration(base_dir)
             diff_file_path = base_dir / "tmp" / "diffs" / "diff_pix.md"
             events: list[str] = []
+            documents = []
             client = RecordingSummaryClient()
             test_case = self
 
@@ -64,8 +67,18 @@ class RuntimeFlowTests(unittest.TestCase):
                     events.append("extract commits")
                     test_case.assertEqual(release_marker, "[Release]")
                     return (
-                        GitCommit("pix1", "dev@example.com", "Pix: add payment"),
-                        GitCommit("ignored", "outsider@example.com", "Pix: ignore"),
+                        GitCommit(
+                            "pix1",
+                            "dev@example.com",
+                            "Pix: add payment",
+                            datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+                        ),
+                        GitCommit(
+                            "ignored",
+                            "outsider@example.com",
+                            "Pix: ignore",
+                            datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+                        ),
                     )
 
             def synchronize(repository_path: Path) -> None:
@@ -80,6 +93,10 @@ class RuntimeFlowTests(unittest.TestCase):
                 diff_file_path.write_text("pix-only diff", encoding="utf-8")
                 return {"Pix": diff_file_path}
 
+            def recording_export(document, output_path):
+                documents.append(document)
+                return export_release_pdf(document, output_path)
+
             with patch(
                 "release_notes_generator.workflow.synchronize_repository",
                 side_effect=synchronize,
@@ -89,6 +106,9 @@ class RuntimeFlowTests(unittest.TestCase):
             ), patch(
                 "release_notes_generator.workflow.generate_diff_files",
                 side_effect=generate_diffs,
+            ), patch(
+                "release_notes_generator.workflow.export_release_pdf",
+                side_effect=recording_export,
             ):
                 result = ReleaseNotesWorkflow(summary_client=client).run(runtime_config_path)
 
@@ -99,6 +119,10 @@ class RuntimeFlowTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(events, ["synchronize", "create extractor", "extract commits", "generate diffs"])
         self.assertEqual(client.calls, [("Pix", "pix-only diff")])
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0].repository_name, "repo")
+        self.assertEqual(documents[0].qualifying_change_count, 1)
+        self.assertEqual(documents[0].sections[0].modules[0].qualifying_change_count, 1)
         self.assertEqual(output_header, b"%PDF-")
         self.assertTrue(diff_file_removed)
 

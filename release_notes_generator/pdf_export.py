@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List
 
 import reportlab
+from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -36,8 +37,41 @@ def build_pdf_story(document: ReleaseDocument) -> List[Flowable]:
     styles = _document_styles()
     story: List[Flowable] = [
         Paragraph(html.escape(document.title), styles["title"]),
-        Spacer(1, 8 * mm),
+        Spacer(1, 3 * mm),
+        Paragraph(
+            html.escape(f"Repository: {document.repository_name}"),
+            styles["metadata"],
+        ),
+        Paragraph(
+            html.escape(f"Qualifying changes: {document.qualifying_change_count}"),
+            styles["metadata"],
+        ),
     ]
+
+    if document.change_start_date is not None and document.change_end_date is not None:
+        story.append(
+            Paragraph(
+                html.escape(
+                    "Change dates (UTC): "
+                    f"{_format_range(document.change_start_date, document.change_end_date)}"
+                ),
+                styles["metadata"],
+            )
+        )
+    if (
+        document.change_start_iso_week is not None
+        and document.change_end_iso_week is not None
+    ):
+        story.append(
+            Paragraph(
+                html.escape(
+                    "ISO weeks: "
+                    f"{_format_range(document.change_start_iso_week, document.change_end_iso_week)}"
+                ),
+                styles["metadata"],
+            )
+        )
+    story.append(Spacer(1, 8 * mm))
 
     if not document.sections:
         if document.empty_message:
@@ -49,6 +83,18 @@ def build_pdf_story(document: ReleaseDocument) -> List[Flowable]:
         story.append(Spacer(1, 3 * mm))
         for module in section.modules:
             story.append(Paragraph(html.escape(module.name), styles["module"]))
+            change_label = (
+                "qualifying change"
+                if module.qualifying_change_count == 1
+                else "qualifying changes"
+            )
+            module_context = (
+                f"{module.qualifying_change_count} {change_label} · "
+                f"{_format_range(module.change_start_date, module.change_end_date)} (UTC)"
+            )
+            story.append(
+                Paragraph(html.escape(module_context), styles["module_context"])
+            )
             story.extend(_summary_flowables(module.summary, styles))
             story.append(Spacer(1, 3 * mm))
         story.append(Spacer(1, 3 * mm))
@@ -153,6 +199,24 @@ def _document_styles() -> dict[str, ParagraphStyle]:
             parent=sample["Heading2"],
             fontName=_FONT_BOLD,
         ),
+        "metadata": ParagraphStyle(
+            "ReleaseMetadata",
+            parent=sample["BodyText"],
+            fontName=_FONT_REGULAR,
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor("#425466"),
+            spaceAfter=2,
+        ),
+        "module_context": ParagraphStyle(
+            "ReleaseModuleContext",
+            parent=sample["BodyText"],
+            fontName=_FONT_ITALIC,
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor("#5B6675"),
+            spaceAfter=5,
+        ),
         "body": ParagraphStyle(
             "ReleaseBody",
             parent=sample["BodyText"],
@@ -171,3 +235,9 @@ def _document_styles() -> dict[str, ParagraphStyle]:
             spaceAfter=4,
         ),
     }
+
+
+def _format_range(start: object, end: object) -> str:
+    if start == end:
+        return str(start)
+    return f"{start} – {end}"
