@@ -1,120 +1,98 @@
 # Integration Test Protocol
 
-This file records the integration-test decisions made for this project so future context windows can continue the same approach without re-discussing the fixture design.
+This file records the integration-test fixture and safety rules for the project.
 
-## Main Goal
+## Purpose
 
-Integration tests should verify that the application can process a large real-world Git history and keep release-note inputs separated by configured groups.
+Integration tests verify that the application can process a large brownfield Git history while keeping release-note inputs restricted to configured author emails and subject prefixes.
 
-The stress target is not just commit extraction. The end goal is to prove that large code diffs can be separated into independent payloads and, once later phases exist, summarized into separate AI-generated reports.
+## External Fixture
 
-## Fixture Repository
+Use the public Linux kernel repository:
 
-Use the locally cloned Redis repository as the integration fixture:
+`git@github.com:torvalds/linux.git`
 
-`/Users/carloseduardo/Downloads/Project/redis`
+Keep a separately managed clone at:
 
-The Redis clone is intentionally not created by integration tests. Cloning the repository is a separate manual setup operation. Integration tests should only use the local fixture after it exists.
+`/Users/carloseduardo/Downloads/Project/linux`
 
-If the Redis repository is missing, or if the path is not a Git repository, integration tests should skip with a clear message.
+The integration suite never creates, fetches, rebases, resets, or otherwise mutates this external fixture. If the fixture is missing or is not a Git repository, Linux integration tests skip with a clear setup message.
 
-## Runtime Code Constraint
+The fixture is intentionally large. GitHub's Linux history contains more than 1.4 million commits, and a nominally shallow clone can still retain the full graph because of its dense merge ancestry. Setup is a separate manual operation:
 
-Changes required only to make integration testing easier should be made in test files or test configuration files only.
+```sh
+git clone git@github.com:torvalds/linux.git /Users/carloseduardo/Downloads/Project/linux
+```
 
-Runtime code should only be changed when the tests expose a clear production design problem.
+On case-insensitive filesystems, checkout can report Linux paths that differ only by case. Tests avoid relying on the fixture worktree and read its Git object database instead.
 
-## Release Marker Strategy
+## Temporary Worktree Safety
 
-Production is expected to use an explicit release marker such as `[Release]` in a commit subject.
+Tests that exercise fetch and rebase create a temporary clone derived from the external fixture with `git clone --shared --no-checkout`. They enable a sparse checkout of `Documentation`, populate it with `git read-tree -mu HEAD`, and perform synchronization only in that temporary clone.
 
-For the Redis integration fixture, do not rewrite Redis commits. This is a test-only compromise. Instead, the integration release marker config uses an existing Redis commit subject as the marker:
+The temporary clone has its own branch, index, worktree, and local origin. Shared immutable objects keep setup fast without modifying the fixture. The temporary directory is removed by the test framework after each test.
 
-`Update to latest hiredis (#10297)`
+## Verified Release Window
 
-This differs from production behavior and must remain documented as test-only behavior. The current implementation searches Git subjects through `git log %s`, so the marker must match the actual Git commit subject, not a GitHub Markdown title/body rendering.
+The integration release marker is:
 
-Current expected marker commit in the local Redis fixture:
+`Linux 7.1`
 
-`e8c5b66ed2aaf40bec345ff5aca90721fb707d30`
+Its commit is `8cd9520d35a6c38db6567e97dd93b1f11f185dc6`. At verification time, the marker-to-`HEAD` range contained 15,875 commits. Assertions use stable lower bounds because the public fixture can move forward.
 
-## Integration Config Files
+## Verified Contributors and Prefixes
 
-Integration tests use the `*IT.json` files under `config/`. Runtime code must continue referencing default JSON files unless a test explicitly passes an IT config path.
+Contributor configuration uses the exact raw author emails emitted by `git log --format=%ae`:
 
-Current Redis IT marker config:
+- `kuba@kernel.org`
+- `johannes.berg@intel.com`
+- `seanjc@google.com`
+- `broonie@kernel.org`
+- `linkinjeon@kernel.org`
 
-`config/releaseMarkerIT.json`
+These are major Linux contributors and active subsystem authors. The configured case-sensitive prefixes are deliberately high-volume within the release window:
 
-Current Redis IT users config:
+- `wifi:` — 112 accepted commits
+- `KVM:` — 86 accepted commits
+- `ksmbd:` — 72 accepted commits
+- `ASoC:` — 65 accepted commits
+- `net:` — 33 accepted commits
 
-`config/userIT.json`
+Together they provide 368 accepted commits from only five approved emails across a 15,875-commit range.
 
-Approved contributors:
+## JSON Configuration
 
-- `debing.sun@redis.com`
-- `vitahlin@gmail.com`
-- `moticless@gmail.com`
+All integration settings live under `config/`:
 
-Current Redis IT modules config:
+- `userIT.json` — approved Linux author emails
+- `moduleIT.json` — Linux prefixes and dynamic PDF sections
+- `releaseMarkerIT.json` — `Linux 7.1`
+- `aiIT.json` — sanitized endpoint/model settings and request character limit
+- `workflowLinuxIT.json` — fixture, temporary diff, and PDF output paths
 
-`config/moduleIT.json`
+Runtime code always receives a configuration file path. Full-workflow tests copy the committed workflow JSON into their temporary directory and replace only repository/output paths with test-local absolute paths.
 
-Configured groups:
+## Test Shape
 
-- `Add` with tags `Add`, `add`
-- `Fix` with tags `Fix`, `fix`
+The non-live integration suite covers:
 
-Current AI IT config:
+- JSON loading for verified Linux emails, prefixes, sections, marker, and request limit.
+- Marker lookup and a large marker-to-`HEAD` extraction.
+- Exact-email filtering and case-sensitive first-prefix classification.
+- Real fetch/rebase in a temporary derived worktree.
+- Separated diff generation for every configured category.
+- Bounded recording-AI calls, dynamic document sections, atomic PDF generation, and diff cleanup.
 
-`config/aiIT.json`
-
-The AI IT config must not contain an API key. It may contain endpoint, model, prompt, and the environment variable name used to locate the key. The current live AI integration target is OpenCode Go using the OpenAI-compatible `https://opencode.ai/zen/go/v1/chat/completions` endpoint and the `kimi-k2.6` model.
-
-Local AI secrets must live outside version control, currently in `.env.local` or process environment.
-
-Current full workflow IT config:
-
-`config/workflowRedisIT.json`
-
-The full workflow IT config must reference the Redis fixture and the Redis `*IT.json` files. Generated full-workflow artifacts must remain under `tests/assets/`.
-
-## Current Integration Test Shape
-
-Keep one integration test for each independently testable workflow part and one integration test for the combined flow.
-
-Current parts:
-
-- Load Redis IT configuration.
-- Locate the configured Redis marker commit.
-- Extract a large commit range after the marker.
-- Filter commits by approved users and configured groups.
-- Run the combined extraction, filtering, grouping, and diff-size separation flow.
-- Run the full workflow through `ReleaseNotesWorkflow.run()` using `config/workflowRedisIT.json`, with AI summarization mocked and repository synchronization mocked to avoid mutating the externally managed Redis fixture.
-- Optionally run live AI summarization against separated Redis diff payloads.
-
-Assertions should prefer stable thresholds and invariants over exact counts because the local Redis fixture can move forward over time.
+Assertions prefer stable lower thresholds and invariants over exact current counts.
 
 ## Optional Live AI Integration
 
-Live AI integration tests must be skipped by default.
+Live AI integration is skipped unless `RUN_LIVE_AI_IT=1` and the configured API-key environment variable is available in process environment or ignored `.env.local`.
 
-To run live AI integration tests, set `RUN_LIVE_AI_IT=1` and `OPENCODE_GO_API_KEY` in process environment or the ignored `.env.local` file.
+The live test uses one accepted Linux commit per configured module, preserves module separation, applies the configured request bound, redacts authorization headers from inspection assets, and writes generated artifacts only under `tests/assets/`.
 
-When enabled, live AI integration tests must make real API requests through the configured AI API client. These tests must use Redis-derived diff payloads and write generated diff files, sanitized AI request payload assets, and AI reports only under `tests/assets/`.
+Before a live run, generated content under `tests/assets/` is cleared. A successful live run retains its latest sanitized request payloads, diffs, and summaries for manual inspection.
 
-Before each live AI integration run, generated content under `tests/assets/` must be deleted so the run starts clean. The test must not delete `tests/assets/` at the end of a successful run; the directory should retain only the most recent run's generated diffs, request payload assets, and summaries for manual inspection.
+## Generated Assets
 
-The API key must be read from the environment variable named by the AI config file. It must never be committed in JSON config, test files, source files, fixtures, or documentation.
-
-## Future Full Workflow Assets
-
-When the full workflow integration test is created after all features are implemented, generated code diffs and AI reports must be stored temporarily under:
-
-`tests/assets/`
-
-Before each full workflow integration test run, every generated file and directory inside `tests/assets/` must be deleted so the test starts from a clean asset directory.
-
-The integration test may recreate `tests/assets/` if it does not exist. The directory is for temporary test artifacts only and should not be used as a source of expected golden files unless that is explicitly decided later.
-
-Full workflow integration tests must not leave temporary diff files behind after a successful run. They may leave the final generated release-notes Markdown file long enough to assert its contents, then clean it up before the test exits.
+Normal full-workflow tests write only inside their framework-managed temporary directory and leave no repository assets behind. Successful workflows delete temporary `diff_*.md` files and retain exactly one final PDF long enough for assertions.

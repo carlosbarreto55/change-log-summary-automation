@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from release_notes_generator.commits import GitHistoryError
+from release_notes_generator.configuration import ConfigurationError
+from release_notes_generator.diffs import DiffGenerationError
+from release_notes_generator.pdf_export import PDFGenerationError
+from release_notes_generator.summarization import AISummarizationError
 from release_notes_generator.workflow import ReleaseNotesWorkflow
 
 
@@ -13,7 +19,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the release notes workflow."""
     parser = argparse.ArgumentParser(
         prog="change-log-summary",
-        description="Generate Markdown release notes from a configured Git repository.",
+        description="Generate PDF release notes from a configured Git repository.",
     )
     parser.add_argument(
         "--config",
@@ -24,4 +30,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     workflow = ReleaseNotesWorkflow()
-    return workflow.run(args.config)
+    try:
+        return workflow.run(args.config)
+    except (
+        ConfigurationError,
+        GitHistoryError,
+        DiffGenerationError,
+        AISummarizationError,
+        PDFGenerationError,
+    ) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1

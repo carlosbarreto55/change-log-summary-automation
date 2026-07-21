@@ -1,52 +1,58 @@
-"""Final Markdown release-notes composition."""
+"""Output-independent structured release-notes composition."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Mapping
+from dataclasses import dataclass
+from typing import Mapping, Optional
+
+from release_notes_generator.configuration import ModuleConfig
 
 
-GLOBAL_FEATURE_MODULES = ("GlobalLoyalty", "TransitOpenLoop")
-PIX_MODULE = "Pix"
+@dataclass(frozen=True)
+class ReleaseModuleSummary:
+    """One configured module and its generated summary."""
+
+    name: str
+    summary: str
 
 
-def compose_release_notes(summaries: Mapping[str, str]) -> str:
-    """Compose AI-generated module summaries into the final release notes Markdown."""
-    global_feature_summaries = []
-    for module_name in GLOBAL_FEATURE_MODULES:
-        summary = summaries.get(module_name, "").strip()
-        if summary:
-            global_feature_summaries.append(summary)
-    pix_summary = summaries.get(PIX_MODULE, "").strip()
+@dataclass(frozen=True)
+class ReleaseSection:
+    """One configured release-notes section."""
 
-    sections = [
-        "# Release Notes",
-        "",
-        "## Global Features",
-        "",
-        *_join_section_summaries(global_feature_summaries),
-        "## Pix",
-        "",
-        pix_summary,
-    ]
-    return "\n".join(sections).rstrip() + "\n"
+    title: str
+    modules: tuple[ReleaseModuleSummary, ...]
 
 
-def export_release_notes(summaries: Mapping[str, str], output_path: Path) -> Path:
-    """Write the final release notes Markdown to one explicit output file."""
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(compose_release_notes(summaries), encoding="utf-8")
-    return path
+@dataclass(frozen=True)
+class ReleaseDocument:
+    """Ordered release-note content independent from an output format."""
+
+    title: str
+    sections: tuple[ReleaseSection, ...]
+    empty_message: Optional[str] = None
 
 
-def _join_section_summaries(summaries: list[str]) -> list[str]:
-    if not summaries:
-        return [""]
-    lines: list[str] = []
-    for summary in summaries:
-        if lines:
-            lines.append("")
-        lines.append(summary)
-    lines.append("")
-    return lines
+def compose_release_document(
+    summaries: Mapping[str, str],
+    module_config: ModuleConfig,
+) -> ReleaseDocument:
+    """Compose configured module summaries into ordered, non-empty sections."""
+    section_modules: dict[str, list[ReleaseModuleSummary]] = {}
+    for module in module_config.modules:
+        summary = summaries.get(module.name, "").strip()
+        if not summary:
+            continue
+        section_modules.setdefault(module.section, []).append(
+            ReleaseModuleSummary(module.name, summary)
+        )
+
+    sections = tuple(
+        ReleaseSection(title, tuple(modules))
+        for title, modules in section_modules.items()
+    )
+    return ReleaseDocument(
+        title="Release Notes",
+        sections=sections,
+        empty_message=None if sections else "No qualifying changes.",
+    )

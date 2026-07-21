@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from release_notes_generator.composition import compose_release_document
+from release_notes_generator.configuration import ModuleConfig, ModuleDefinition
 from release_notes_generator.summarization import summarize_diff_files
 
 
@@ -11,7 +13,11 @@ class RecordingSummaryClient:
 
     def summarize(self, module_name: str, diff_content: str) -> str:
         self.calls.append((module_name, diff_content))
-        return f"Summary for {module_name}"
+        return f"- Summary part for {module_name}"
+
+    def reduce(self, module_name: str, partial_summaries: str) -> str:
+        self.calls.append((module_name, partial_summaries))
+        return "- Final"
 
 
 class AISummarizationFlowTests(unittest.TestCase):
@@ -29,14 +35,16 @@ class AISummarizationFlowTests(unittest.TestCase):
             (diff_dir / "diff_unmapped.md").write_text("must not be summarized", encoding="utf-8")
             client = RecordingSummaryClient()
 
-            summaries = summarize_diff_files(diff_files, client)
+            summaries = summarize_diff_files(
+                diff_files, client, max_characters_per_request=100
+            )
 
         self.assertEqual(
             summaries,
             {
-                "Pix": "Summary for Pix",
-                "GlobalLoyalty": "Summary for GlobalLoyalty",
-                "TransitOpenLoop": "Summary for TransitOpenLoop",
+                "Pix": "- Summary part for Pix",
+                "GlobalLoyalty": "- Summary part for GlobalLoyalty",
+                "TransitOpenLoop": "- Summary part for TransitOpenLoop",
             },
         )
         self.assertEqual(
@@ -47,6 +55,28 @@ class AISummarizationFlowTests(unittest.TestCase):
                 ("TransitOpenLoop", "transit-only diff"),
             ],
         )
+
+    def test_multiple_chunks_flow_into_final_configured_document(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diff_path = Path(temp_dir) / "diff_payments.md"
+            diff_path.write_text("commit a\n" + ("x" * 40), encoding="utf-8")
+            client = RecordingSummaryClient()
+
+            summaries = summarize_diff_files(
+                {"Payments": diff_path}, client, max_characters_per_request=20
+            )
+            document = compose_release_document(
+                summaries,
+                ModuleConfig(
+                    modules=(
+                        ModuleDefinition("Payments", ("PAY:",), "Customer Features"),
+                    )
+                ),
+            )
+
+        self.assertGreater(len(client.calls), 2)
+        self.assertEqual(document.sections[0].title, "Customer Features")
+        self.assertEqual(document.sections[0].modules[0].summary, "- Final")
 
 
 if __name__ == "__main__":

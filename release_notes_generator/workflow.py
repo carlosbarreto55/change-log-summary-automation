@@ -12,7 +12,7 @@ from release_notes_generator.commits import (
     group_commit_hashes_by_module,
     synchronize_repository,
 )
-from release_notes_generator.composition import export_release_notes
+from release_notes_generator.composition import compose_release_document
 from release_notes_generator.configuration import (
     load_ai_config,
     load_module_config,
@@ -21,6 +21,7 @@ from release_notes_generator.configuration import (
     load_user_config,
 )
 from release_notes_generator.diffs import delete_diff_files, generate_diff_files
+from release_notes_generator.pdf_export import export_release_pdf
 from release_notes_generator.summarization import (
     OpenAIChatClient,
     SummaryClient,
@@ -37,11 +38,11 @@ class WorkflowStep:
 
 DEFAULT_WORKFLOW_STEPS: Tuple[WorkflowStep, ...] = (
     WorkflowStep("load runtime configuration"),
-    WorkflowStep("synchronize target repository"),
     WorkflowStep("load release marker"),
     WorkflowStep("load approved users"),
     WorkflowStep("load supported modules"),
     WorkflowStep("load AI settings"),
+    WorkflowStep("synchronize target repository"),
     WorkflowStep("locate release marker"),
     WorkflowStep("capture commits after release marker"),
     WorkflowStep("filter commits by approved users"),
@@ -51,9 +52,8 @@ DEFAULT_WORKFLOW_STEPS: Tuple[WorkflowStep, ...] = (
     WorkflowStep("generate category diff files"),
     WorkflowStep("send category diffs to AI API"),
     WorkflowStep("receive category summaries"),
-    WorkflowStep("merge global feature summaries"),
-    WorkflowStep("insert pix summary"),
-    WorkflowStep("export final release notes"),
+    WorkflowStep("compose configured release document"),
+    WorkflowStep("export final PDF release notes"),
     WorkflowStep("delete temporary diff files"),
 )
 
@@ -76,15 +76,14 @@ class ReleaseNotesWorkflow:
     def run(self, config_path: Path) -> int:
         """Execute the configured release notes workflow once."""
         runtime_config = load_runtime_config(config_path)
-
-        synchronize_repository(runtime_config.repository_path)
-
         release_marker_config = load_release_marker_config(
             runtime_config.release_marker_config_path
         )
         user_config = load_user_config(runtime_config.user_config_path)
         module_config = load_module_config(runtime_config.module_config_path)
         ai_config = load_ai_config(runtime_config.ai_config_path)
+
+        synchronize_repository(runtime_config.repository_path)
 
         commits = GitCommitExtractor(
             runtime_config.repository_path
@@ -107,8 +106,13 @@ class ReleaseNotesWorkflow:
                 ai_config,
                 env_file=runtime_config.env_file_path,
             )
-            summaries = summarize_diff_files(diff_files, client)
+            summaries = summarize_diff_files(
+                diff_files,
+                client,
+                ai_config.max_diff_characters_per_request,
+            )
 
-        export_release_notes(summaries, runtime_config.output_path)
+        document = compose_release_document(summaries, module_config)
+        export_release_pdf(document, runtime_config.output_path)
         delete_diff_files(diff_files.values())
         return 0

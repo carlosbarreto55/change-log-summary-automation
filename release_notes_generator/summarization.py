@@ -25,6 +25,9 @@ class SummaryClient(Protocol):
     def summarize(self, module_name: str, diff_content: str) -> str:
         """Return the standalone summary for one module diff payload."""
 
+    def reduce(self, module_name: str, partial_summaries: str) -> str:
+        """Combine partial summaries for one module into a smaller summary."""
+
 
 class OpenAIChatClient:
     """OpenAI-compatible chat-completions summarization client."""
@@ -67,14 +70,28 @@ class OpenAIChatClient:
         )
 
     def summarize(self, module_name: str, diff_content: str) -> str:
+        return self._complete(
+            system_prompt=self._prompt,
+            user_content=f"Module: {module_name}\n\nDiff:\n{diff_content}",
+        )
+
+    def reduce(self, module_name: str, partial_summaries: str) -> str:
+        return self._complete(
+            system_prompt=(
+                "Combine the partial release-note summaries into one concise summary. "
+                "Preserve user-visible facts and return Markdown bullets."
+            ),
+            user_content=(
+                f"Module: {module_name}\n\nPartial summaries:\n{partial_summaries}"
+            ),
+        )
+
+    def _complete(self, system_prompt: str, user_content: str) -> str:
         payload = {
             "model": self._model,
             "messages": [
-                {"role": "system", "content": self._prompt},
-                {
-                    "role": "user",
-                    "content": f"Module: {module_name}\n\nDiff:\n{diff_content}",
-                },
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
             ],
         }
         request = urllib.request.Request(
@@ -108,8 +125,9 @@ class OpenAIChatClient:
 def summarize_diff_files(
     diff_files: Mapping[str, Path],
     client: SummaryClient,
+    max_characters_per_request: int,
 ) -> dict[str, str]:
-    """Read each category diff file and request one standalone AI summary per file."""
+    """Summarize bounded chunks and reduce them to one summary per module."""
     summaries: dict[str, str] = {}
     for module_name, diff_file_path in diff_files.items():
         try:
@@ -118,13 +136,130 @@ def summarize_diff_files(
             raise AISummarizationError(f"Unable to read diff file: {diff_file_path}") from exc
 
         try:
-            summaries[module_name] = client.summarize(module_name, diff_content)
+            partial_summaries = [
+                client.summarize(module_name, chunk)
+                for chunk in split_diff_content(diff_content, max_characters_per_request)
+            ]
+            summaries[module_name] = _reduce_summaries(
+                module_name,
+                partial_summaries,
+                client,
+                max_characters_per_request,
+            )
         except AISummarizationError:
             raise
         except Exception as exc:
-            raise AISummarizationError(f"AI summarization failed for module: {module_name}") from exc
+            raise AISummarizationError(
+                f"AI summarization failed for module: {module_name}"
+            ) from exc
 
     return summaries
+
+
+def split_diff_content(diff_content: str, max_characters: int) -> tuple[str, ...]:
+    """Split diff text losslessly, preferring commit and then line boundaries."""
+    if max_characters <= 0:
+        raise AISummarizationError("AI request character limit must be positive.")
+    if len(diff_content) <= max_characters:
+        return (diff_content,)
+
+    segments = _commit_segments(diff_content)
+    pieces: list[str] = []
+    for segment in segments:
+        pieces.extend(_bounded_text_pieces(segment, max_characters))
+    return _pack_exact_pieces(pieces, max_characters)
+
+
+def _commit_segments(content: str) -> tuple[str, ...]:
+    boundaries = [0]
+    offset = 0
+    for line in content.splitlines(keepends=True):
+        if offset and line.startswith("commit "):
+            boundaries.append(offset)
+        offset += len(line)
+    boundaries.append(len(content))
+    return tuple(
+        content[start:end]
+        for start, end in zip(boundaries, boundaries[1:])
+        if end > start
+    ) or (content,)
+
+
+def _bounded_text_pieces(content: str, max_characters: int) -> tuple[str, ...]:
+    if len(content) <= max_characters:
+        return (content,)
+
+    pieces: list[str] = []
+    current = ""
+    for line in content.splitlines(keepends=True):
+        while len(line) > max_characters:
+            if current:
+                pieces.append(current)
+                current = ""
+            pieces.append(line[:max_characters])
+            line = line[max_characters:]
+        if current and len(current) + len(line) > max_characters:
+            pieces.append(current)
+            current = ""
+        current += line
+    if current:
+        pieces.append(current)
+    return tuple(pieces)
+
+
+def _pack_exact_pieces(
+    pieces: list[str],
+    max_characters: int,
+) -> tuple[str, ...]:
+    chunks: list[str] = []
+    current = ""
+    for piece in pieces:
+        if current and len(current) + len(piece) > max_characters:
+            chunks.append(current)
+            current = ""
+        current += piece
+    if current or not chunks:
+        chunks.append(current)
+    return tuple(chunks)
+
+
+def _reduce_summaries(
+    module_name: str,
+    partial_summaries: list[str],
+    client: SummaryClient,
+    max_characters: int,
+) -> str:
+    current = partial_summaries
+    for _ in range(20):
+        if len(current) == 1:
+            return current[0]
+        payloads = _pack_summary_payloads(current, max_characters)
+        current = [client.reduce(module_name, payload) for payload in payloads]
+    raise AISummarizationError(
+        f"AI summary reduction did not converge for module: {module_name}"
+    )
+
+
+def _pack_summary_payloads(
+    summaries: list[str],
+    max_characters: int,
+) -> tuple[str, ...]:
+    pieces: list[str] = []
+    for summary in summaries:
+        pieces.extend(_bounded_text_pieces(summary, max_characters))
+
+    payloads: list[str] = []
+    current = ""
+    for piece in pieces:
+        separator = "\n\n" if current else ""
+        if current and len(current) + len(separator) + len(piece) > max_characters:
+            payloads.append(current)
+            current = piece
+        else:
+            current = f"{current}{separator}{piece}"
+    if current:
+        payloads.append(current)
+    return tuple(payloads)
 
 
 def load_env_file(env_file_path: Optional[Path]) -> dict[str, str]:

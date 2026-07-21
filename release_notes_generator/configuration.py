@@ -27,10 +27,24 @@ class UserConfig:
 
 
 @dataclass(frozen=True)
-class ModuleConfig:
-    """Supported module tags loaded from JSON configuration."""
+class ModuleDefinition:
+    """One configured module and its release-notes section."""
 
-    module_tags: Mapping[str, tuple[str, ...]]
+    name: str
+    tags: tuple[str, ...]
+    section: str
+
+
+@dataclass(frozen=True)
+class ModuleConfig:
+    """Ordered module definitions loaded from JSON configuration."""
+
+    modules: tuple[ModuleDefinition, ...]
+
+    @property
+    def module_tags(self) -> Mapping[str, tuple[str, ...]]:
+        """Return configured tags keyed by module name in configuration order."""
+        return {module.name: module.tags for module in self.modules}
 
 
 @dataclass(frozen=True)
@@ -48,6 +62,7 @@ class AIConfig:
     model: str
     api_key_env_var: str
     prompt: str
+    max_diff_characters_per_request: int
 
 
 @dataclass(frozen=True)
@@ -71,8 +86,8 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
     base_dir = path.resolve(strict=False).parent
 
     output_path = _required_path(data, "output_path", base_dir)
-    if output_path.suffix.lower() != ".md":
-        raise ConfigurationError("Runtime configuration output_path must be a .md file.")
+    if output_path.suffix.lower() != ".pdf":
+        raise ConfigurationError("Runtime configuration output_path must be a .pdf file.")
 
     return RuntimeConfig(
         repository_path=_required_path(data, "repository_path", base_dir),
@@ -108,23 +123,26 @@ def load_module_config(config_path: Path = DEFAULT_MODULE_CONFIG_PATH) -> Module
     if not isinstance(modules, list):
         raise ConfigurationError("Modules configuration must define modules as a list.")
 
-    module_tags: dict[str, tuple[str, ...]] = {}
+    module_definitions: list[ModuleDefinition] = []
     for module in modules:
         if not isinstance(module, dict):
             raise ConfigurationError("Each module configuration entry must be an object.")
 
         name = module.get("name")
         tags = module.get("tags")
+        section = module.get("section")
         if not isinstance(name, str) or not name:
             raise ConfigurationError("Each module configuration entry must define a name.")
-        if not _is_string_list(tags):
+        if not _is_non_empty_string_list(tags):
             raise ConfigurationError(
-                "Each module configuration entry must define tags as a list of strings."
+                "Each module configuration entry must define non-empty tags as a list of strings."
             )
+        if not isinstance(section, str) or not section:
+            raise ConfigurationError("Each module configuration entry must define a section.")
 
-        module_tags[name] = tuple(tags)
+        module_definitions.append(ModuleDefinition(name, tuple(tags), section))
 
-    return ModuleConfig(module_tags=module_tags)
+    return ModuleConfig(modules=tuple(module_definitions))
 
 
 def load_release_marker_config(
@@ -150,6 +168,7 @@ def load_ai_config(config_path: Path = DEFAULT_AI_CONFIG_PATH) -> AIConfig:
     model = data.get("model")
     api_key_env_var = data.get("api_key_env_var")
     prompt = data.get("prompt")
+    max_diff_characters_per_request = data.get("max_diff_characters_per_request")
     if not isinstance(api_url, str) or not api_url:
         raise ConfigurationError("AI configuration must define an api_url string.")
     if not isinstance(model, str) or not model:
@@ -158,12 +177,22 @@ def load_ai_config(config_path: Path = DEFAULT_AI_CONFIG_PATH) -> AIConfig:
         raise ConfigurationError("AI configuration must define an api_key_env_var string.")
     if not isinstance(prompt, str) or not prompt:
         raise ConfigurationError("AI configuration must define a prompt string.")
+    if (
+        isinstance(max_diff_characters_per_request, bool)
+        or not isinstance(max_diff_characters_per_request, int)
+        or max_diff_characters_per_request <= 0
+    ):
+        raise ConfigurationError(
+            "AI configuration must define max_diff_characters_per_request "
+            "as a positive integer."
+        )
 
     return AIConfig(
         api_url=api_url,
         model=model,
         api_key_env_var=api_key_env_var,
         prompt=prompt,
+        max_diff_characters_per_request=max_diff_characters_per_request,
     )
 
 
@@ -184,6 +213,14 @@ def _load_json_object(config_path: Path) -> dict[str, Any]:
 
 def _is_string_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _is_non_empty_string_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and bool(item) for item in value)
+    )
 
 
 def _required_path(data: Mapping[str, Any], field_name: str, base_dir: Path) -> Path:

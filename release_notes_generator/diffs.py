@@ -53,6 +53,7 @@ def _git_show(repository_path: Path, commit_hash: str) -> str:
         ["git", "-C", str(repository_path), "show", commit_hash],
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:

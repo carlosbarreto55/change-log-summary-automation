@@ -8,6 +8,7 @@ from release_notes_generator.configuration import AIConfig
 from release_notes_generator.summarization import (
     AISummarizationError,
     OpenAIChatClient,
+    split_diff_content,
     summarize_diff_files,
 )
 
@@ -15,10 +16,15 @@ from release_notes_generator.summarization import (
 class RecordingSummaryClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.reduction_calls: list[tuple[str, str]] = []
 
     def summarize(self, module_name: str, diff_content: str) -> str:
         self.calls.append((module_name, diff_content))
         return f"{module_name} summary"
+
+    def reduce(self, module_name: str, partial_summaries: str) -> str:
+        self.reduction_calls.append((module_name, partial_summaries))
+        return f"{module_name} reduced summary"
 
 
 class SummarizationTests(unittest.TestCase):
@@ -33,6 +39,7 @@ class SummarizationTests(unittest.TestCase):
             summaries = summarize_diff_files(
                 {"Pix": pix_diff_path, "GlobalLoyalty": global_diff_path},
                 client,
+                max_characters_per_request=100,
             )
 
         self.assertEqual(
@@ -52,13 +59,102 @@ class SummarizationTests(unittest.TestCase):
             ignored_diff_path.write_text("unauthorized ignored diff", encoding="utf-8")
             client = RecordingSummaryClient()
 
-            summarize_diff_files({"Pix": pix_diff_path}, client)
+            summarize_diff_files(
+                {"Pix": pix_diff_path}, client, max_characters_per_request=100
+            )
 
         self.assertEqual(client.calls, [("Pix", "authorized pix diff")])
 
     def test_missing_diff_file_raises_summarization_error(self) -> None:
         with self.assertRaises(AISummarizationError):
-            summarize_diff_files({"Pix": Path("missing-diff.md")}, RecordingSummaryClient())
+            summarize_diff_files(
+                {"Pix": Path("missing-diff.md")},
+                RecordingSummaryClient(),
+                max_characters_per_request=100,
+            )
+
+    def test_in_limit_diff_remains_one_lossless_chunk(self) -> None:
+        content = "commit a1\nsmall diff\n"
+
+        chunks = split_diff_content(content, max_characters=100)
+
+        self.assertEqual(chunks, (content,))
+
+    def test_diff_chunks_prefer_commit_boundaries_and_preserve_exact_content(self) -> None:
+        content = "commit a1\nfirst\n\ncommit b2\nsecond\n\ncommit c3\nthird\n"
+
+        chunks = split_diff_content(content, max_characters=30)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunks), content)
+        self.assertTrue(all(len(chunk) <= 30 for chunk in chunks))
+        self.assertTrue(any(chunk.startswith("commit b2") for chunk in chunks))
+
+    def test_one_oversized_commit_is_split_losslessly_at_line_boundaries(self) -> None:
+        content = "commit a1\n" + "line one\n" + ("x" * 25) + "\nline three\n"
+
+        chunks = split_diff_content(content, max_characters=12)
+
+        self.assertEqual("".join(chunks), content)
+        self.assertTrue(all(len(chunk) <= 12 for chunk in chunks))
+        self.assertGreater(len(chunks), 3)
+
+    def test_multiple_chunks_are_reduced_to_one_bounded_module_summary(self) -> None:
+        class ReducingClient:
+            def __init__(self) -> None:
+                self.summary_calls: list[tuple[str, str]] = []
+                self.reduction_calls: list[tuple[str, str]] = []
+
+            def summarize(self, module_name: str, diff_content: str) -> str:
+                self.summary_calls.append((module_name, diff_content))
+                return f"part-{len(self.summary_calls)}"
+
+            def reduce(self, module_name: str, partial_summaries: str) -> str:
+                self.reduction_calls.append((module_name, partial_summaries))
+                return "final"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diff_path = Path(temp_dir) / "diff_pix.md"
+            diff_path.write_text("commit a\n123456789\ncommit b\nabcdefghi\n", encoding="utf-8")
+            client = ReducingClient()
+
+            summaries = summarize_diff_files(
+                {"Pix": diff_path}, client, max_characters_per_request=20
+            )
+
+        self.assertEqual(summaries, {"Pix": "final"})
+        self.assertGreater(len(client.summary_calls), 1)
+        self.assertTrue(all(module == "Pix" for module, _ in client.summary_calls))
+        self.assertTrue(all(len(content) <= 20 for _, content in client.summary_calls))
+        self.assertTrue(all(module == "Pix" for module, _ in client.reduction_calls))
+        self.assertTrue(all(len(content) <= 20 for _, content in client.reduction_calls))
+
+    def test_reduction_recurses_when_partial_summaries_do_not_fit_together(self) -> None:
+        class ShrinkingClient:
+            def __init__(self) -> None:
+                self.summary_count = 0
+                self.reduction_calls: list[str] = []
+
+            def summarize(self, module_name: str, diff_content: str) -> str:
+                self.summary_count += 1
+                return f"summary{self.summary_count}"
+
+            def reduce(self, module_name: str, partial_summaries: str) -> str:
+                self.reduction_calls.append(partial_summaries)
+                return "x"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diff_path = Path(temp_dir) / "diff.md"
+            diff_path.write_text("a" * 30, encoding="utf-8")
+            client = ShrinkingClient()
+
+            summaries = summarize_diff_files(
+                {"Only": diff_path}, client, max_characters_per_request=10
+            )
+
+        self.assertEqual(summaries, {"Only": "x"})
+        self.assertGreaterEqual(len(client.reduction_calls), 4)
+        self.assertTrue(all(len(content) <= 10 for content in client.reduction_calls))
 
     def test_openai_chat_client_sends_expected_request_and_returns_summary(self) -> None:
         config = AIConfig(
@@ -66,6 +162,7 @@ class SummarizationTests(unittest.TestCase):
             model="summary-model",
             api_key_env_var="CHANGE_LOG_SUMMARY_AI_API_KEY",
             prompt="Summarize release-note diffs.",
+            max_diff_characters_per_request=1000,
         )
         client = OpenAIChatClient.from_config(
             config,
@@ -98,6 +195,7 @@ class SummarizationTests(unittest.TestCase):
             model="summary-model",
             api_key_env_var="CHANGE_LOG_SUMMARY_AI_API_KEY",
             prompt="Summarize release-note diffs.",
+            max_diff_characters_per_request=1000,
         )
 
         with self.assertRaises(AISummarizationError):
@@ -109,6 +207,7 @@ class SummarizationTests(unittest.TestCase):
             model="summary-model",
             api_key_env_var="CHANGE_LOG_SUMMARY_AI_API_KEY",
             prompt="Summarize release-note diffs.",
+            max_diff_characters_per_request=1000,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             env_file = Path(temp_dir) / ".env.local"

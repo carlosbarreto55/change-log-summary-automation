@@ -1,127 +1,57 @@
 # Change Log Summary
 
-Change Log Summary is an open-source release intelligence tool for development teams that need reliable, audit-friendly release notes from Git history.
+Change Log Summary generates release notes from a local Git worktree and saves the result as a PDF on the user's disk. It is designed for large brownfield repositories where many people contribute but only explicitly approved author emails should count toward a release.
 
-The project helps Scrum teams turn implementation work into clear, categorized summaries that support sprint reviews, release planning, Product Owner reporting, and QA validation. Instead of asking engineers to manually reconstruct what changed, the tool filters commits, separates code diffs by configured product area, uses AI to summarize each focused payload, and composes the result into a Markdown release-notes document.
+The workflow is configuration-driven: contributor emails, trusted commit prefixes, output sections, release boundary, AI request limit, repository path, temporary paths, and final PDF path all come from JSON files.
 
-## Purpose
+## How It Works
 
-Modern product teams often need the same delivery information in different forms:
+For one configured run, the tool:
 
-- Development teams need a consistent way to document what was implemented.
-- Product Owners need concise summaries that connect technical changes to release scope.
-- QA engineers need a practical view of what changed so they can plan validation and regression testing.
-- Scrum teams need trustworthy release evidence for sprint reviews, release readiness, and stakeholder communication.
+1. Loads and validates every referenced JSON file.
+2. Runs `git fetch --prune` and then `git rebase @{u}` in the target worktree.
+3. Finds the newest commit whose subject contains the configured release marker.
+4. Extracts commits from `<marker>..HEAD`, oldest first.
+5. Keeps only commits whose raw Git author email exactly matches the contributor allowlist.
+6. Assigns each remaining commit to the first module whose case-sensitive prefix matches its subject.
+7. Generates one temporary Git diff file per non-empty module.
+8. Splits oversized module diffs into bounded, ordered AI requests.
+9. Reduces chunk summaries within the same module until one module summary remains.
+10. Composes configured sections and modules in JSON order.
+11. Atomically writes one Unicode-capable PDF to the configured local path.
+12. Deletes the temporary diff files after successful generation.
 
-Change Log Summary is designed to reduce manual release-note work while keeping the process traceable, configurable, and safe for large repositories.
-
-## What It Does
-
-The tool processes a local Git repository and builds release-note content through a controlled pipeline:
-
-1. Finds the latest configured release marker in Git history.
-2. Extracts commits after that marker.
-3. Filters commits by approved contributors.
-4. Classifies commits by configurable product areas, services, modules, or release categories.
-5. Discards unauthorized or unmapped commits before diff generation.
-6. Groups accepted commits by category.
-7. Generates focused Markdown diff files per category.
-8. Sends each category-specific diff independently to an AI API.
-9. Receives standalone AI summaries per category.
-10. Composes final Markdown release notes from the AI-generated summaries.
-
-This design avoids sending the full repository history to AI. Only locally filtered, category-specific diffs are sent.
-
-## Who It Helps
-
-### Development Teams
-
-- Reduces repetitive release-note writing.
-- Keeps release summaries tied to actual Git history.
-- Encourages consistent commit classification and release documentation.
-
-### Product Owners
-
-- Provides clearer visibility into delivered scope.
-- Helps translate technical changes into reviewable release summaries.
-- Supports sprint review preparation and release communication.
-
-### QA Engineers
-
-- Highlights the areas of the product that changed.
-- Helps identify validation focus and regression impact.
-- Keeps QA planning aligned with the actual implementation diff.
-
-### Scrum Teams
-
-- Improves release transparency.
-- Supports sprint review and release-readiness conversations.
-- Creates a repeatable evidence trail from commit history to release notes.
-
-## Key Features
-
-- Git-based release range detection using a configurable release marker.
-- Approved-contributor filtering before any AI request is made.
-- Configurable commit classification by product area or release category.
-- Separate diff generation for each accepted category.
-- OpenAI-compatible AI summarization client.
-- OpenCode Go live integration support through sanitized configuration.
-- Environment-based API key loading with no secrets stored in JSON config.
-- Optional live AI integration tests that preserve the latest generated assets for inspection.
-- Final Markdown composition with grouped release-note sections.
-
-## Current Status
-
-The project now includes a CLI-driven end-to-end workflow for:
-
-- JSON configuration loading.
-- Git commit extraction and filtering.
-- Commit grouping.
-- Category-specific diff generation.
-- AI summarization.
-- Final Markdown composition.
-- Temporary diff cleanup after successful output generation.
-
-The workflow is executed from a single runtime JSON configuration file passed to the CLI.
+Unauthorized authors and unmapped prefixes are discarded before diff generation, so their source changes never reach the AI client.
 
 ## Requirements
 
 - Python 3.9 or newer.
-- Git CLI available on the host machine.
-- A local clone of the target repository to analyze.
-- An AI API key for live summarization.
+- Git available on the host machine.
+- A local target worktree whose current branch tracks an upstream branch.
+- An OpenAI-compatible API key when qualifying changes require summarization.
 
 ## Installation
 
-Create a virtual environment and install the project locally:
+Create a virtual environment and install the project, including ReportLab:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
-The project exposes a console script:
+Run the CLI with a runtime JSON path:
 
 ```bash
-change-log-summary --config path/to/workflow.json
+.venv/bin/change-log-summary --config path/to/workflow.json
 ```
+
+A successful run returns status `0`. Expected configuration, Git, diff, AI, and PDF failures print a concise message to standard error and return a nonzero status without an expected-error Python traceback.
 
 ## Configuration
 
-Configuration is JSON-based so teams can adapt filtering and classification without changing Python code.
+The runtime manifest references four other JSON files. Relative paths are resolved from the directory containing the runtime manifest. Absolute paths and `~` home-relative paths are supported.
 
-The project supports configuration for:
-
-- Approved contributor identities.
-- Release markers.
-- Product areas, services, modules, or release categories.
-- AI endpoint, model, prompt, and API key environment variable name.
-
-AI configuration must not store secret values. Store only the environment variable name that contains the key.
-
-The CLI requires one runtime workflow JSON file. Relative paths are resolved from the directory containing that runtime JSON file.
-
-Example runtime workflow configuration:
+### Runtime manifest
 
 ```json
 {
@@ -131,122 +61,169 @@ Example runtime workflow configuration:
   "release_marker_config_path": "releaseMarker.json",
   "ai_config_path": "ai.json",
   "temp_diff_dir": "../tmp/diffs",
-  "output_path": "../output/release_notes.md",
+  "output_path": "../output/release_notes.pdf",
   "env_file_path": "../.env.local"
 }
 ```
 
-Before reading release history, the workflow runs:
+`output_path` is required to end in `.pdf`. Its parent directories are created automatically. The PDF is rendered to a temporary sibling file and replaces the destination atomically only after rendering succeeds.
 
-```bash
-git -C <repository_path> fetch --prune
-git -C <repository_path> rebase @{u}
+### Contributors
+
+Contributor identity is intentionally exact and simple:
+
+```json
+{
+  "approved_author_emails": [
+    "alice@example.com",
+    "bob@example.com"
+  ]
+}
 ```
 
-If synchronization fails, processing stops before commit extraction, diff generation, AI requests, or output writing.
+The tool compares these strings with Git's raw `%ae` author email. Matching is case-sensitive. Multiple aliases, `.mailmap`, co-author lines, and pull-request attribution are not used.
 
-Example AI configuration shape:
+### Modules and sections
+
+```json
+{
+  "modules": [
+    {
+      "name": "Network Core",
+      "tags": ["net:"],
+      "section": "Networking"
+    },
+    {
+      "name": "Wi-Fi",
+      "tags": ["wifi:"],
+      "section": "Networking"
+    },
+    {
+      "name": "KVM",
+      "tags": ["KVM:"],
+      "section": "Virtualization"
+    }
+  ]
+}
+```
+
+A tag is a trusted, case-sensitive subject prefix. The first matching module wins. Module order follows JSON order; section order follows the first appearance of each section. Empty modules and sections are omitted. If no commits qualify, the PDF contains `No qualifying changes.` and no AI key is required.
+
+### Release boundary
+
+```json
+{
+  "marker": "Linux 7.1"
+}
+```
+
+The newest reachable commit whose subject contains this non-empty string is the exclusive lower boundary. The upper boundary is the successfully rebased `HEAD`.
+
+### AI settings
 
 ```json
 {
   "api_url": "https://provider.example/v1/chat/completions",
   "model": "summary-model",
   "api_key_env_var": "RELEASE_NOTES_AI_API_KEY",
-  "prompt": "Summarize the provided category-specific Git diff for release notes."
+  "prompt": "Summarize the provided module-specific Git diff for release notes.",
+  "max_diff_characters_per_request": 120000
 }
 ```
 
-Local secrets can be provided through the process environment or an ignored local env file.
+`max_diff_characters_per_request` must be a positive integer. Diff splitting preserves all content, prefers commit boundaries, and falls back to line boundaries for one oversized commit. Chunk and reduction requests remain ordered and module-specific; content from separate modules is never mixed.
 
-## AI Integration
+The JSON stores only the name of the API-key environment variable. The secret itself can be provided through the process environment or the ignored local env file.
 
-The AI client sends one request per generated category diff. Each request contains:
+## Repository Synchronization and Recovery
 
-- A system prompt from configuration.
-- A user message with the category name and the filtered diff content.
-- The configured model identifier.
+All configuration is validated before the target worktree is changed. The mandatory synchronization sequence is:
 
-The client uses an OpenAI-compatible chat-completions request format and sends explicit JSON headers plus a stable user agent.
+```bash
+git -C <repository_path> fetch --prune
+git -C <repository_path> rebase @{u}
+```
 
-## Generated Assets
+If fetch fails, rebase and all release processing stop. If rebase fails, the tool preserves Git's original error, attempts `git rebase --abort`, reports the abort outcome, and stops before marker lookup, diff generation, AI requests, or PDF output. If abort also fails, the message warns that manual repository recovery may be required.
 
-Optional live AI integration tests generate temporary inspection assets under the test assets directory.
+## PDF Output
 
-Those assets can include:
+The final document contains:
 
-- Generated category diff Markdown files.
-- Sanitized AI request payloads.
-- AI-generated Markdown summaries.
+- A release-notes title.
+- Non-empty configured section headings.
+- Non-empty configured module headings in configured order.
+- AI summary paragraphs and bullet lines.
 
-Generated assets are ignored by Git. Each live test run clears previous assets at the beginning and preserves the latest run afterward for manual inspection.
+ReportLab Platypus renders the structured document with the bundled Vera TrueType font family. Summary lines beginning with `- ` or `* ` become bullets; other non-empty lines become paragraphs. No final Markdown release-notes file is written.
 
-Request assets redact authorization headers so API keys are not written to disk.
+## Linux Integration Fixture
+
+Integration tests use the public Linux kernel repository as a large brownfield fixture:
+
+```bash
+git clone git@github.com:torvalds/linux.git /Users/carloseduardo/Downloads/Project/linux
+```
+
+This is a separately managed, multi-gigabyte fixture. Tests skip clearly when it is absent and never mutate it. Fetch/rebase tests create a temporary shared-object clone with a sparse worktree, perform all synchronization there, and remove that temporary clone afterward.
+
+The committed Linux integration JSON uses:
+
+- Release marker `Linux 7.1` (15,875 commits to `HEAD` when verified).
+- Five exact contributor emails.
+- High-volume prefixes `wifi:`, `KVM:`, `ksmbd:`, `ASoC:`, and `net:`.
+- 368 accepted commits when verified.
+
+See `tests/integration/PROTOCOL.md` for the exact verified emails, counts, safety rules, and fixture behavior.
 
 ## Testing
 
-Run the unit test suite:
+Run suites in increasing scope:
 
 ```bash
-python3 -m unittest discover tests/unit
+.venv/bin/python -m unittest discover -v tests/unit
+.venv/bin/python -m unittest discover -v tests/context
+RUN_LIVE_AI_IT=0 .venv/bin/python -m unittest discover -v tests/integration
 ```
 
-Run all non-live tests:
+Run the optional networked AI integration test:
 
 ```bash
-RUN_LIVE_AI_IT=0 python3 -m unittest discover tests
+RUN_LIVE_AI_IT=1 .venv/bin/python -m unittest -v tests.integration.test_ai_summarization_live
 ```
 
-Run the optional live AI integration test:
-
-```bash
-RUN_LIVE_AI_IT=1 python3 -m unittest -v tests.integration.test_ai_summarization_live
-```
-
-Live AI tests require the configured AI API key environment variable to be available in the process environment or local env file.
+The live test requires the configured API key. It records sanitized request payloads under `tests/assets/`, redacts authorization headers, and preserves the most recent live-run assets for inspection. Normal non-live workflow tests use temporary directories and leave no generated repository assets behind.
 
 ## Security Notes
 
-- Do not commit API keys.
-- Do not store API keys in JSON configuration.
-- Keep local env files outside version control.
-- Generated test assets may contain source diffs and should be treated as local development artifacts.
-- AI requests are intentionally split and filtered before leaving the local machine.
+- Never store or commit API keys in JSON.
+- Treat temporary diffs and live-test assets as sensitive source artifacts.
+- Review contributor emails and prefixes before running against a proprietary repository.
+- Use a conservative request character limit appropriate for the selected model.
+- Remember that qualifying diff content is sent to the configured external AI endpoint.
 
 ## Project Structure
 
 ```text
+config/                    Default and Linux integration JSON
 release_notes_generator/
-  commits.py          Git history extraction, filtering, and grouping
-  configuration.py    JSON configuration loading and validation
-  diffs.py            Category-specific diff file generation
-  summarization.py    AI summarization client and diff summarization flow
-  composition.py      Final Markdown release-notes composition
-  workflow.py         End-to-end workflow orchestration
-
+  commits.py               Synchronization, history extraction, filtering, grouping
+  configuration.py         JSON loading and validation
+  diffs.py                 Per-module temporary diff generation
+  summarization.py         Bounded AI chunking and hierarchical reduction
+  composition.py           Ordered structured release document
+  pdf_export.py            Atomic ReportLab PDF rendering
+  workflow.py              End-to-end orchestration
 tests/
-  unit/               Class-level and module-level tests
-  context/            Cross-module flow tests with mocked boundaries
-  integration/        External repository and optional live AI tests
+  unit/                    Class/module tests
+  context/                 Cross-module workflow tests
+  integration/             Linux fixture and optional live AI tests
 ```
-
-## Roadmap
-
-Planned work includes:
-
-- End-to-end workflow verification.
-- Public release packaging and documented license terms.
 
 ## Contributing
 
-Contributions should keep the project configurable, test-driven, and safe for repositories with sensitive code.
-
-Before changing behavior:
-
-- Add or update tests first.
-- Keep unit tests separate from context and integration tests.
-- Avoid committing secrets or generated assets.
-- Prefer small, explicit changes over broad abstractions.
+Add or update tests before changing behavior. Keep unit tests separate from cross-module and external-repository coverage, keep configuration explicit, and avoid committing generated assets or secrets.
 
 ## License
 
-This project is intended to be distributed as an open-source tool. Add the project license terms in a `LICENSE` file before public release.
+The project is intended for open-source distribution. Add a `LICENSE` file before public release.
