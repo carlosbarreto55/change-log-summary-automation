@@ -28,7 +28,7 @@ from release_notes_generator.summarization import (
 )
 
 
-REDIS_REPOSITORY_PATH = PROJECT_ROOT.parent / "redis"
+LINUX_REPOSITORY_PATH = PROJECT_ROOT.parent / "linux"
 USER_IT_CONFIG_PATH = CONFIG_DIR / "userIT.json"
 MODULE_IT_CONFIG_PATH = CONFIG_DIR / "moduleIT.json"
 RELEASE_MARKER_IT_CONFIG_PATH = CONFIG_DIR / "releaseMarkerIT.json"
@@ -44,21 +44,21 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
         if cls.environment.get("RUN_LIVE_AI_IT", "").lower() not in {"1", "true", "yes"}:
             raise unittest.SkipTest("Set RUN_LIVE_AI_IT=1 to run live AI integration tests.")
 
-        if not REDIS_REPOSITORY_PATH.exists():
+        if not LINUX_REPOSITORY_PATH.exists():
             raise unittest.SkipTest(
-                f"Redis integration fixture not found at {REDIS_REPOSITORY_PATH}. "
-                "Clone it once outside the test run."
+                f"Linux integration fixture not found at {LINUX_REPOSITORY_PATH}. "
+                "Clone git@github.com:torvalds/linux.git once outside the test run."
             )
 
         result = subprocess.run(
-            ["git", "-C", str(REDIS_REPOSITORY_PATH), "rev-parse", "--is-inside-work-tree"],
+            ["git", "-C", str(LINUX_REPOSITORY_PATH), "rev-parse", "--git-dir"],
             capture_output=True,
             text=True,
             check=False,
         )
         if result.returncode != 0 or result.stdout.strip() != "true":
             raise unittest.SkipTest(
-                f"Redis integration fixture is not a Git repository: {REDIS_REPOSITORY_PATH}"
+                f"Linux integration fixture is not a Git repository: {LINUX_REPOSITORY_PATH}"
             )
 
         cls.ai_config = load_ai_config(AI_IT_CONFIG_PATH)
@@ -67,12 +67,12 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
                 f"Missing AI API key environment variable: {cls.ai_config.api_key_env_var}"
             )
 
-    def test_live_ai_summarizes_separated_redis_diff_payloads(self) -> None:
+    def test_live_ai_summarizes_bounded_separated_linux_diff_payloads(self) -> None:
         _reset_assets_dir()
         release_marker_config = load_release_marker_config(RELEASE_MARKER_IT_CONFIG_PATH)
         user_config = load_user_config(USER_IT_CONFIG_PATH)
         module_config = load_module_config(MODULE_IT_CONFIG_PATH)
-        commits = GitCommitExtractor(REDIS_REPOSITORY_PATH).commits_after_latest_release_marker(
+        commits = GitCommitExtractor(LINUX_REPOSITORY_PATH).commits_after_latest_release_marker(
             release_marker_config.marker
         )
         accepted_commits = filter_commits(
@@ -83,7 +83,7 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
         selected_commits = _first_commit_per_module(accepted_commits, tuple(module_config.module_tags))
 
         grouped_hashes = group_commit_hashes_by_module(selected_commits)
-        diff_files = generate_diff_files(REDIS_REPOSITORY_PATH, grouped_hashes, ASSETS_DIR)
+        diff_files = generate_diff_files(LINUX_REPOSITORY_PATH, grouped_hashes, ASSETS_DIR)
         client = OpenAIChatClient.from_config(self.ai_config, environ=self.environment)
         original_urlopen = urllib.request.urlopen
         request_count = 0
@@ -99,10 +99,14 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
             "release_notes_generator.summarization.urllib.request.urlopen",
             side_effect=recording_urlopen,
         ):
-            summaries = summarize_diff_files(diff_files, client)
+            summaries = summarize_diff_files(
+                diff_files,
+                client,
+                self.ai_config.max_diff_characters_per_request,
+            )
 
         self.assertEqual(set(summaries), set(grouped_hashes))
-        self.assertEqual(request_count, len(grouped_hashes))
+        self.assertGreaterEqual(request_count, len(grouped_hashes))
         request_asset_paths = sorted(request_assets_dir.glob("request_*.json"))
         self.assertEqual(len(request_asset_paths), len(grouped_hashes))
         request_modules = {
@@ -110,9 +114,16 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
             for path in request_asset_paths
         }
         self.assertEqual(request_modules, set(grouped_hashes))
+        self.assertTrue(
+            all(
+                len(_bounded_input_from_payload(json.loads(path.read_text(encoding="utf-8"))["body"]))
+                <= self.ai_config.max_diff_characters_per_request
+                for path in request_asset_paths
+            )
+        )
         for module_name, summary in summaries.items():
             self.assertTrue(summary.strip())
-            summary_path = ASSETS_DIR / f"summary_{module_name.lower()}.md"
+            summary_path = ASSETS_DIR / f"summary_{_asset_safe_name(module_name)}.md"
             summary_path.write_text(summary, encoding="utf-8")
             self.assertTrue(summary_path.is_file())
 
@@ -161,7 +172,7 @@ def _first_commit_per_module(accepted_commits, module_names: tuple[str, ...]):
 
     missing_modules = set(module_names) - set(selected)
     if missing_modules:
-        raise AssertionError(f"No accepted Redis commits found for modules: {missing_modules}")
+        raise AssertionError(f"No accepted Linux commits found for modules: {missing_modules}")
     return tuple(selected[module_name] for module_name in module_names)
 
 
@@ -216,6 +227,23 @@ def _module_name_from_payload(payload) -> str:
         if first_line.startswith("Module: "):
             return first_line.removeprefix("Module: ").strip() or "unknown"
     return "unknown"
+
+
+def _bounded_input_from_payload(payload) -> str:
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if not isinstance(messages, list):
+        return ""
+
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for boundary in ("\n\nDiff:\n", "\n\nPartial summaries:\n"):
+            if boundary in content:
+                return content.split(boundary, 1)[1]
+    return ""
 
 
 def _asset_safe_name(value: str) -> str:

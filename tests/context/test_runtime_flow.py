@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from release_notes_generator.commits import GitCommit, GitHistoryError
+from release_notes_generator.configuration import ConfigurationError
 from release_notes_generator.workflow import ReleaseNotesWorkflow
 
 
@@ -25,11 +26,11 @@ class RuntimeFlowTests(unittest.TestCase):
             workflow.step_names(),
             [
                 "load runtime configuration",
-                "synchronize target repository",
                 "load release marker",
                 "load approved users",
                 "load supported modules",
                 "load AI settings",
+                "synchronize target repository",
                 "locate release marker",
                 "capture commits after release marker",
                 "filter commits by approved users",
@@ -39,9 +40,8 @@ class RuntimeFlowTests(unittest.TestCase):
                 "generate category diff files",
                 "send category diffs to AI API",
                 "receive category summaries",
-                "merge global feature summaries",
-                "insert pix summary",
-                "export final release notes",
+                "compose configured release document",
+                "export final PDF release notes",
                 "delete temporary diff files",
             ],
         )
@@ -92,15 +92,14 @@ class RuntimeFlowTests(unittest.TestCase):
             ):
                 result = ReleaseNotesWorkflow(summary_client=client).run(runtime_config_path)
 
-            output_path = base_dir / "output" / "release_notes.md"
-            output = output_path.read_text(encoding="utf-8")
+            output_path = base_dir / "output" / "release_notes.pdf"
+            output_header = output_path.read_bytes()[:5]
             diff_file_removed = not diff_file_path.exists()
 
         self.assertEqual(result, 0)
         self.assertEqual(events, ["synchronize", "create extractor", "extract commits", "generate diffs"])
         self.assertEqual(client.calls, [("Pix", "pix-only diff")])
-        self.assertIn("## Pix", output)
-        self.assertIn("- Pix summary", output)
+        self.assertEqual(output_header, b"%PDF-")
         self.assertTrue(diff_file_removed)
 
     def test_run_stops_before_commit_processing_when_sync_fails(self) -> None:
@@ -111,14 +110,40 @@ class RuntimeFlowTests(unittest.TestCase):
                 "release_notes_generator.workflow.synchronize_repository",
                 side_effect=GitHistoryError("sync failed"),
             ), patch(
-                "release_notes_generator.workflow.load_release_marker_config"
-            ) as load_release_marker:
+                "release_notes_generator.workflow.GitCommitExtractor"
+            ) as extractor, patch(
+                "release_notes_generator.workflow.generate_diff_files"
+            ) as generate_diffs, patch(
+                "release_notes_generator.workflow.summarize_diff_files"
+            ) as summarize, patch(
+                "release_notes_generator.workflow.export_release_pdf"
+            ) as export:
                 with self.assertRaises(GitHistoryError):
                     ReleaseNotesWorkflow(summary_client=RecordingSummaryClient()).run(
                         runtime_config_path
                     )
 
-        load_release_marker.assert_not_called()
+        extractor.assert_not_called()
+        generate_diffs.assert_not_called()
+        summarize.assert_not_called()
+        export.assert_not_called()
+
+    def test_run_validates_referenced_configuration_before_synchronizing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            runtime_config_path = _write_runtime_configuration(base_dir)
+            (base_dir / "config" / "releaseMarker.json").write_text(
+                json.dumps({"marker": ""}),
+                encoding="utf-8",
+            )
+
+            with patch("release_notes_generator.workflow.synchronize_repository") as synchronize:
+                with self.assertRaises(ConfigurationError):
+                    ReleaseNotesWorkflow(summary_client=RecordingSummaryClient()).run(
+                        runtime_config_path
+                    )
+
+        synchronize.assert_not_called()
 
 
 def _write_runtime_configuration(base_dir: Path) -> Path:
@@ -130,7 +155,9 @@ def _write_runtime_configuration(base_dir: Path) -> Path:
         encoding="utf-8",
     )
     (config_dir / "module.json").write_text(
-        json.dumps({"modules": [{"name": "Pix", "tags": ["Pix:"]}]}),
+        json.dumps(
+            {"modules": [{"name": "Pix", "tags": ["Pix:"], "section": "Pix"}]}
+        ),
         encoding="utf-8",
     )
     (config_dir / "releaseMarker.json").write_text(
@@ -144,6 +171,7 @@ def _write_runtime_configuration(base_dir: Path) -> Path:
                 "model": "summary-model",
                 "api_key_env_var": "CHANGE_LOG_SUMMARY_AI_API_KEY",
                 "prompt": "Summarize release-note diffs.",
+                "max_diff_characters_per_request": 12000,
             }
         ),
         encoding="utf-8",
@@ -158,7 +186,7 @@ def _write_runtime_configuration(base_dir: Path) -> Path:
                 "release_marker_config_path": "releaseMarker.json",
                 "ai_config_path": "ai.json",
                 "temp_diff_dir": "../tmp/diffs",
-                "output_path": "../output/release_notes.md",
+                "output_path": "../output/release_notes.pdf",
             }
         ),
         encoding="utf-8",

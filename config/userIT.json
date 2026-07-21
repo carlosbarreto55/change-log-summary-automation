@@ -1,7 +1,9 @@
 {
   "approved_author_emails": [
-    "debing.sun@redis.com",
-    "vitahlin@gmail.com",
-    "moticless@gmail.com"
+    "kuba@kernel.org",
+    "johannes.berg@intel.com",
+    "seanjc@google.com",
+    "broonie@kernel.org",
+    "linkinjeon@kernel.org"
   ]
 }

@@ -1,12 +1,29 @@
 {
   "modules": [
     {
-      "name": "Add",
-      "tags": ["Add", "add"]
+      "name": "Wi-Fi",
+      "tags": ["wifi:"],
+      "section": "Networking"
     },
     {
-      "name": "Fix",
-      "tags": ["Fix", "fix"]
+      "name": "Network Core",
+      "tags": ["net:"],
+      "section": "Networking"
+    },
+    {
+      "name": "KVM",
+      "tags": ["KVM:"],
+      "section": "Virtualization"
+    },
+    {
+      "name": "ALSA SoC",
+      "tags": ["ASoC:"],
+      "section": "Audio"
+    },
+    {
+      "name": "KSMBD",
+      "tags": ["ksmbd:"],
+      "section": "Filesystems"
     }
   ]
 }

@@ -1,72 +1,78 @@
-import tempfile
 import unittest
-from pathlib import Path
 
-from release_notes_generator.composition import compose_release_notes, export_release_notes
+from release_notes_generator.composition import (
+    ReleaseDocument,
+    ReleaseModuleSummary,
+    ReleaseSection,
+    compose_release_document,
+)
+from release_notes_generator.configuration import ModuleConfig, ModuleDefinition
 
 
 class ReleaseNotesCompositionTests(unittest.TestCase):
-    def test_final_markdown_contains_global_features_and_pix_sections(self) -> None:
-        markdown = compose_release_notes(
+    def test_sections_and_modules_follow_configuration_order(self) -> None:
+        document = compose_release_document(
             {
                 "Pix": "- Pix summary",
                 "GlobalLoyalty": "- Global loyalty summary",
                 "TransitOpenLoop": "- Transit summary",
-            }
+            },
+            _module_config(),
         )
 
-        self.assertIn("## Global Features", markdown)
-        self.assertIn("## Pix", markdown)
-
-    def test_global_loyalty_and_transit_summaries_merge_under_global_features(self) -> None:
-        markdown = compose_release_notes(
-            {
-                "Pix": "- Pix summary",
-                "GlobalLoyalty": "- Global loyalty summary",
-                "TransitOpenLoop": "- Transit summary",
-            }
+        self.assertEqual(
+            document,
+            ReleaseDocument(
+                title="Release Notes",
+                sections=(
+                    ReleaseSection(
+                        title="Global Features",
+                        modules=(
+                            ReleaseModuleSummary("GlobalLoyalty", "- Global loyalty summary"),
+                            ReleaseModuleSummary("TransitOpenLoop", "- Transit summary"),
+                        ),
+                    ),
+                    ReleaseSection(
+                        title="Pix",
+                        modules=(ReleaseModuleSummary("Pix", "- Pix summary"),),
+                    ),
+                ),
+            ),
         )
 
-        global_features_index = markdown.index("## Global Features")
-        global_loyalty_index = markdown.index("- Global loyalty summary")
-        transit_index = markdown.index("- Transit summary")
-        pix_section_index = markdown.index("## Pix")
-
-        self.assertLess(global_features_index, global_loyalty_index)
-        self.assertLess(global_loyalty_index, pix_section_index)
-        self.assertLess(transit_index, pix_section_index)
-
-    def test_pix_summary_is_inserted_under_pix_section(self) -> None:
-        markdown = compose_release_notes(
-            {
-                "Pix": "- Pix summary",
-                "GlobalLoyalty": "- Global loyalty summary",
-                "TransitOpenLoop": "- Transit summary",
-            }
+    def test_empty_modules_and_sections_are_omitted(self) -> None:
+        document = compose_release_document(
+            {"Pix": "- Pix summary", "GlobalLoyalty": "", "Unknown": "ignored"},
+            _module_config(),
         )
 
-        self.assertLess(markdown.index("## Pix"), markdown.index("- Pix summary"))
+        self.assertEqual(
+            document.sections,
+            (
+                ReleaseSection(
+                    title="Pix",
+                    modules=(ReleaseModuleSummary("Pix", "- Pix summary"),),
+                ),
+            ),
+        )
 
-    def test_export_release_notes_writes_single_markdown_file(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "release_notes.md"
+    def test_no_qualifying_changes_document_has_clear_message(self) -> None:
+        document = compose_release_document({}, _module_config())
 
-            result_path = export_release_notes(
-                {
-                    "Pix": "- Pix summary",
-                    "GlobalLoyalty": "- Global loyalty summary",
-                    "TransitOpenLoop": "- Transit summary",
-                },
-                output_path,
-            )
+        self.assertEqual(document.title, "Release Notes")
+        self.assertEqual(document.sections, ())
+        self.assertEqual(document.empty_message, "No qualifying changes.")
 
-            generated_files = tuple(Path(temp_dir).iterdir())
-            generated_content = output_path.read_text(encoding="utf-8")
 
-        self.assertEqual(result_path, output_path)
-        self.assertEqual(generated_files, (output_path,))
-        self.assertEqual(output_path.suffix, ".md")
-        self.assertIn("## Global Features", generated_content)
+def _module_config() -> ModuleConfig:
+    return ModuleConfig(
+        modules=(
+            ModuleDefinition("GlobalLoyalty", ("GL:",), "Global Features"),
+            ModuleDefinition("TransitOpenLoop", ("TOL:",), "Global Features"),
+            ModuleDefinition("Pix", ("Pix:",), "Pix"),
+            ModuleDefinition("Unused", ("Unused:",), "Empty Section"),
+        )
+    )
 
 
 if __name__ == "__main__":

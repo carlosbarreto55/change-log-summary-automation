@@ -1,175 +1,152 @@
-# AI-Powered Automated Release Notes Generator
+# Configuration-Driven PDF Release Notes Generator
 
 ## Objective
 
-Build a Python automation script that extracts, filters, groups, and summarizes Git commit diffs into a final categorized Release Notes document.
+Build a Python CLI that generates categorized release notes from a local brownfield Git worktree. The tool must count only commits from explicitly approved author emails, classify those commits by trusted subject prefixes, bound all AI input, and atomically save one final PDF on the user's disk.
 
-The tool must process only commits that match approved authors and mapped module tags, split the resulting diffs into smaller category-specific payloads, send each payload independently to an AI API, and compose the AI responses into a single final Markdown file.
+## Core Assumptions
 
-## Context
+- The target repository does not squash commits used for release attribution.
+- Every counted contributor is identified by one exact Git author email.
+- Commit subject prefixes are reliable and can be trusted for category classification.
+- The current local branch tracks an upstream branch and can be rebased.
+- Runtime behavior is controlled by JSON configuration paths rather than project-specific Python constants.
 
-The project is intended to support release auditing for a global codebase with multiple modules and many contributors.
+## Configuration
 
-Because AI APIs have context window limitations, the script must avoid sending the full repository history or unrelated code changes. Instead, it must locally filter commits first, then generate focused diff files for each accepted category.
+The CLI must receive a runtime JSON path. That manifest must provide paths for:
 
-The main modules currently in scope are:
+- The target repository.
+- Contributor configuration.
+- Module and section configuration.
+- Release-marker configuration.
+- AI configuration.
+- Temporary diff output.
+- Final PDF output.
+- An optional local environment file.
 
-- Pix
-- GlobalLoyalty
-- TransitOpenLoop
+Relative paths must resolve from the runtime JSON directory. Absolute and home-relative paths must be supported. The final output path must end in `.pdf`.
 
-## Tech Stack
+### Contributors JSON
 
-- Python for the automation script
-- Git CLI for commit history and diff extraction
-- JSON for configurable users and modules
-- Markdown for temporary diff files and final release notes output
-- AI API integration for summarizing filtered diffs
+The contributors file must contain `approved_author_emails` as a list of strings. A commit is approved only when its raw Git `%ae` value exactly and case-sensitively equals a configured value.
 
-## Functional Requirements
+### Modules JSON
 
-### Input Filters
+The modules file must contain an ordered `modules` list. Every entry must define:
 
-The script must support the following filters:
+- A non-empty `name`.
+- A non-empty list of non-empty `tags`.
+- A non-empty output `section`.
 
-- Starting commit based on the last `[Release]` marker
-- Approved author emails loaded from a users JSON file
-- Approved module tags loaded from a modules JSON file
+The first configured module whose tag is a case-sensitive prefix of the commit subject wins. Module order follows JSON order. Section order follows the first appearance of each distinct section in that order.
 
-### Configuration Files
+### Release Marker JSON
 
-Approved users and supported modules must be defined through JSON configuration files.
+The release-marker file must contain one non-empty `marker` string. The newest reachable commit whose subject contains the marker is the exclusive lower release boundary. The successfully rebased `HEAD` is the upper boundary.
 
-The script must use one JSON file for users and one JSON file for modules.
+### AI JSON
 
-The script runtime must accept a JSON configuration file path as a function parameter instead of relying on hard-coded project or test configuration.
+The AI file must contain non-empty endpoint, model, API-key environment-variable name, and prompt strings, plus a positive integer `max_diff_characters_per_request`. It must not contain an API-key value.
 
-The users JSON file must define the approved author emails or email-matching rules used during author filtering.
+All referenced JSON structures must be loaded and validated before repository synchronization begins.
 
-The modules JSON file must define the supported module tags used during commit classification.
+## Repository Synchronization
 
-These files are required so tests and future changes can update filtering behavior without changing the Python implementation.
+Before marker lookup or extraction, the tool must run against the configured worktree:
 
-The exact runtime configuration schema is out of scope for this spec, but the provided configuration file must be the source of runtime paths and filtering configuration.
+1. `git fetch --prune`
+2. `git rebase @{u}`
 
-### Repository Synchronization
+A fetch failure must prevent rebase and all later work. A rebase failure must preserve Git's original error, attempt `git rebase --abort`, report the recovery outcome, and prevent marker lookup, diff generation, AI requests, and PDF generation.
 
-All Git operations used by the main release notes flow must be performed locally through the Git CLI against the target repository.
+Expected configuration, Git, diff, AI, and PDF failures must produce concise standard-error output, a nonzero CLI status, and no expected-error Python traceback.
 
-Before locating the latest `[Release]` marker or extracting commits, the script must synchronize the local target repository with its configured remote source.
+## Commit Extraction and Selection
 
-If repository synchronization fails, the script must stop before processing commits, generating temporary diff files, calling the AI API, or writing the final output.
+The tool must find the newest configured marker against the rebased `HEAD`, exclude that marker commit, and extract later commits oldest first. Each extracted record must contain commit hash, raw author email, and subject.
 
-### Commit Extraction
+Only commits that pass both rules may continue:
 
-The script must capture all commits created after the selected `[Release]` marker.
+1. Exact author-email allowlist match.
+2. First configured case-sensitive subject-prefix match.
 
-Commits outside this range must not be processed.
+Unauthorized and unmapped commits must be discarded before diff generation and AI processing.
 
-### Author Filtering
+Git history and diff decoding must tolerate legacy non-UTF-8 bytes by replacing undecodable characters rather than crashing the workflow.
 
-The script must discard commits where the author email does not match the approved users configuration loaded from the users JSON file.
+## Diff Generation
 
-Unauthorized authors must not have their code diffs included in temporary files or AI API requests.
+Accepted hashes must be grouped by module. For each non-empty group, the tool must run `git show <hash>` in commit order and write one temporary UTF-8 Markdown diff file. Files must never mix hashes from different modules.
 
-### Module Classification
+## Bounded AI Summarization
 
-The script must inspect the beginning of each commit message and classify matching commits into supported module categories.
+Each module diff must be split into ordered chunks no larger than `max_diff_characters_per_request` characters. Splitting must:
 
-The supported categories are:
+- Preserve all diff text exactly.
+- Prefer commit boundaries.
+- Prefer line boundaries when one commit is oversized.
+- Never include content from another module.
 
-- Pix
-- GlobalLoyalty
-- TransitOpenLoop
+Chunks must be summarized sequentially. Multiple partial summaries must be reduced through bounded, ordered, module-specific requests until exactly one summary remains per included module. Unauthorized, unmapped, and cross-module content must never enter either initial or reduction requests.
 
-The supported categories must come from the modules JSON file.
+If no module has an accepted commit, the tool must skip AI-key resolution and generate a document containing `No qualifying changes.`
 
-Commits that do not match one of the supported module tags must be discarded.
+## Structured Composition
 
-### Commit Grouping
+Before rendering, the tool must compose an ordered release document containing:
 
-After filtering and classification, the script must group matching commit hashes by category.
+- Title `Release Notes`.
+- Non-empty configured sections.
+- Non-empty module headings in configured module order.
+- One final summary per included module.
 
-Each category must be processed independently.
+Modules without accepted commits and sections without included modules must be omitted. Summary lines starting with `- ` or `* ` are bullets; other non-empty lines are paragraphs.
 
-### Diff Generation
+## PDF Output
 
-For each category group, the script must run `git show <hash>` for each commit hash in that group.
+ReportLab Platypus must render the structured document directly with the bundled Vera TrueType font family. Renderer-sensitive text must be escaped.
 
-The raw output must be saved into separate temporary Markdown files, such as:
+The renderer must:
 
-- `diff_pix.md`
-- `diff_gl.md`
-- `diff_transit.md`
+1. Create the destination parent directory.
+2. Render to a temporary sibling file.
+3. Atomically replace the configured destination only after successful rendering.
+4. Remove the temporary file on success or failure when possible.
+5. Preserve an existing destination when rendering fails before replacement.
 
-Temporary diff files must contain only commits that passed both the author filter and module classification.
+Successful output must be a non-empty PDF beginning with `%PDF-`. No final Markdown release-notes document may be written.
 
-### AI Summarization
+After successful PDF generation, temporary module diff files must be deleted.
 
-Each generated diff Markdown file must be sent independently to the AI API.
+## Integration Fixture
 
-The script may send requests sequentially or simultaneously, as long as each request contains only one category-specific diff payload.
+Integration tests must use the public Linux kernel repository at `git@github.com:torvalds/linux.git`, available as a separately managed local fixture. They must use JSON configuration and must never synchronize or otherwise mutate that external fixture directly.
 
-The purpose of this step is to generate standalone summaries for each mapped category.
+Synchronization tests must create an isolated temporary worktree derived from the fixture. The suite must cover a large configured marker-to-`HEAD` range, a small exact-email allowlist, high-volume reliable prefixes, separated real diffs, bounded recording-AI calls, dynamic sections, PDF creation, and cleanup.
 
-### Final Composition
-
-The script must compose a single final Markdown Release Notes document using the AI-generated summaries.
-
-The final document must follow these grouping rules:
-
-- GlobalLoyalty and TransitOpenLoop summaries must be merged under `## Global Features`
-- Pix summaries must be inserted under `## Pix`
-
-The output must be a single `.md` file.
-
-### Cleanup
-
-After the final Release Notes file is generated, the script must delete the temporary category diff files.
-
-## Execution Flow
-
-1. Receive a runtime JSON configuration file path as a function parameter.
-2. Load runtime paths and filtering configuration from the provided JSON configuration file.
-3. Synchronize the local target repository using the Git CLI.
-4. Locate the last `[Release]` marker.
-5. Load approved users from the users JSON file.
-6. Load supported module tags from the modules JSON file.
-7. Capture all commits after that release marker.
-8. Filter commits by the approved users configuration.
-9. Parse commit message prefixes to classify commits by configured module tag.
-10. Discard commits from unauthorized authors or unmapped modules.
-11. Group accepted commit hashes by category.
-12. Generate temporary raw diff Markdown files per category using `git show <hash>`.
-13. Send each temporary diff file independently to the AI API.
-14. Receive standalone AI summaries for each category.
-15. Merge GlobalLoyalty and TransitOpenLoop summaries under `## Global Features`.
-16. Insert the Pix summary under `## Pix`.
-17. Export the final Release Notes Markdown file.
-18. Delete temporary diff Markdown files.
+The networked AI integration test must remain opt-in and must never record authorization secrets.
 
 ## Acceptance Criteria
 
-- Commits from unauthorized authors are not processed.
-- Commits from unmapped modules are not processed.
-- Approved users are loaded from a users JSON file.
-- Supported modules are loaded from a modules JSON file.
-- Runtime paths and filtering configuration are loaded from a JSON configuration file path passed as a function parameter.
-- Filtering behavior can be changed by updating the JSON configuration files without changing the Python code.
-- The target repository is synchronized locally through the Git CLI before release-marker detection or commit extraction.
-- Processing stops without generated output if repository synchronization fails.
-- Temporary diff files contain only strictly filtered code diffs.
-- AI API requests are split by category to respect token limits.
-- No AI API request contains unrelated module diffs.
-- The final output is a single Markdown file.
-- The final output contains a `## Global Features` section for GlobalLoyalty and TransitOpenLoop summaries.
-- The final output contains a `## Pix` section for Pix summaries.
-- Temporary Markdown diff files are deleted after final output generation.
+- Every runtime decision described above is loaded from a configuration file path.
+- Invalid configuration fails before fetch or rebase.
+- Fetch runs before rebase; synchronization failures stop downstream work.
+- Rebase failures attempt abort and expose the original Git error.
+- Only exact approved emails and configured first-match prefixes are included.
+- The release range begins after the configured marker and ends at rebased `HEAD`.
+- All AI diff and reduction payloads are bounded and module-specific.
+- Section and module ordering is configuration-driven.
+- Exactly one final PDF is atomically saved to the configured local path.
+- Temporary diffs are removed after a successful run.
+- Unit, context, and non-live Linux integration suites pass.
 
-## Out Of Scope For This Spec
+## Out of Scope
 
-- Selecting a specific AI provider or model
-- Defining the exact prompt text sent to the AI API
-- Defining the final Release Notes file name
-- Defining command-line arguments or the exact runtime configuration file schema
-- Defining retry, rate-limit, or authentication behavior for the AI API
+- Multiple-email aliases, `.mailmap`, co-author parsing, squash attribution, or pull-request APIs.
+- Date, tag, or multi-strategy release boundaries.
+- Path-based or regular-expression classification.
+- Concurrent AI requests.
+- Exact provider-token counting.
+- Output formats other than PDF.
+- Arbitrary Markdown rendering.

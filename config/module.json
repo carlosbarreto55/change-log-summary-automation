@@ -2,15 +2,18 @@
   "modules": [
     {
       "name": "Pix",
-      "tags": ["Pix"]
+      "tags": ["Pix"],
+      "section": "Pix"
     },
     {
       "name": "GlobalLoyalty",
-      "tags": ["GlobalLoyalty"]
+      "tags": ["GlobalLoyalty"],
+      "section": "Global Features"
     },
     {
       "name": "TransitOpenLoop",
-      "tags": ["TransitOpenLoop"]
+      "tags": ["TransitOpenLoop"],
+      "section": "Global Features"
     }
   ]
 }

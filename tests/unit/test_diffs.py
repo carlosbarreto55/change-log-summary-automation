@@ -79,6 +79,7 @@ class DiffGenerationTests(unittest.TestCase):
                 ["git", "-C", "/repo", "show", "gl1"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
 

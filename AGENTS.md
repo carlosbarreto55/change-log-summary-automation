@@ -16,7 +16,7 @@ These instructions apply to all work in this repository.
 - Untested code means the feature is incomplete.
 - Tests are not limited to unit tests; integration tests are required for behavior that crosses module, filesystem, Git, configuration, or workflow boundaries.
 - Keep class-level/unit tests separate from context/integration tests.
-- Integration tests must use the public `httpie` Python repository as the external repository fixture.
+- Integration tests must use the public Linux kernel repository (`git@github.com:torvalds/linux.git`) as the external repository fixture.
 - Integration test configuration must be defined in JSON files.
 - Runtime code must accept a configuration file path as a function parameter instead of relying on hard-coded test or project configuration.
 

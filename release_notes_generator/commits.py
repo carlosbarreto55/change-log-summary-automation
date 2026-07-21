@@ -17,8 +17,32 @@ class GitHistoryError(RuntimeError):
 
 def synchronize_repository(repository_path: Path) -> None:
     """Synchronize the local target repository before release analysis."""
-    _run_git_command(repository_path, ["fetch", "--prune"])
-    _run_git_command(repository_path, ["rebase", "@{u}"])
+    try:
+        _run_git_command(repository_path, ["fetch", "--prune"])
+    except GitHistoryError as exc:
+        raise GitHistoryError(
+            "Repository synchronization failed during fetch.\n\n"
+            f"Git reported:\n{exc}"
+        ) from exc
+
+    try:
+        _run_git_command(repository_path, ["rebase", "@{u}"])
+    except GitHistoryError as rebase_error:
+        try:
+            _run_git_command(repository_path, ["rebase", "--abort"])
+        except GitHistoryError as abort_error:
+            recovery_message = (
+                "The automatic rebase abort also failed:\n"
+                f"{abort_error}\n\n"
+                "The repository may require manual recovery."
+            )
+        else:
+            recovery_message = "The rebase was aborted."
+
+        raise GitHistoryError(
+            "Repository synchronization failed during rebase.\n\n"
+            f"Git reported:\n{rebase_error}\n\n{recovery_message}"
+        ) from rebase_error
 
 
 @dataclass(frozen=True)
@@ -48,7 +72,14 @@ class GitCommitExtractor:
 
     def latest_release_marker_hash(self, release_marker: str) -> Optional[str]:
         """Return the newest commit hash whose subject contains the release marker."""
-        output = self._run_git(["log", "--format=%H%x1f%s"])
+        output = self._run_git(
+            [
+                "log",
+                "--fixed-strings",
+                f"--grep={release_marker}",
+                "--format=%H%x1f%s",
+            ]
+        )
         for line in output.splitlines():
             commit_hash, subject = _split_git_fields(line, 2)
             if release_marker in subject:
@@ -147,6 +178,7 @@ def _run_git_command(repository_path: Path, args: list[str]) -> str:
         command,
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
