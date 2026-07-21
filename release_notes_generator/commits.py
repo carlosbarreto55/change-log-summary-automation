@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
@@ -52,6 +53,7 @@ class GitCommit:
     commit_hash: str
     author_email: str
     subject: str
+    authored_at: datetime
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,7 @@ class ClassifiedCommit:
     author_email: str
     subject: str
     module_name: str
+    authored_at: datetime
 
 
 class GitCommitExtractor:
@@ -96,7 +99,7 @@ class GitCommitExtractor:
             [
                 "log",
                 "--reverse",
-                "--format=%H%x1f%ae%x1f%s",
+                "--format=%H%x1f%ae%x1f%aI%x1f%s",
                 f"{release_marker_hash}..HEAD",
             ]
         )
@@ -129,6 +132,7 @@ def filter_commits(
                 author_email=commit.author_email,
                 subject=commit.subject,
                 module_name=module_name,
+                authored_at=commit.authored_at,
             )
         )
 
@@ -161,8 +165,21 @@ def _classify_module(
 
 
 def _parse_commit_line(line: str) -> GitCommit:
-    commit_hash, author_email, subject = _split_git_fields(line, 3)
-    return GitCommit(commit_hash, author_email, subject)
+    commit_hash, author_email, author_timestamp, subject = _split_git_fields(line, 4)
+    normalized_timestamp = (
+        f"{author_timestamp[:-1]}+00:00"
+        if author_timestamp.endswith("Z")
+        else author_timestamp
+    )
+    try:
+        authored_at = datetime.fromisoformat(normalized_timestamp)
+    except ValueError as exc:
+        raise GitHistoryError(
+            f"Unexpected Git author timestamp: {author_timestamp}"
+        ) from exc
+    if authored_at.tzinfo is None or authored_at.utcoffset() is None:
+        raise GitHistoryError(f"Unexpected Git author timestamp: {author_timestamp}")
+    return GitCommit(commit_hash, author_email, subject, authored_at)
 
 
 def _split_git_fields(line: str, expected_fields: int) -> list[str]:

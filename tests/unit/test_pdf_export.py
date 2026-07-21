@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,9 +20,13 @@ from release_notes_generator.pdf_export import (
 
 
 class PDFStoryTests(unittest.TestCase):
-    def test_story_maps_document_structure_bullets_paragraphs_and_escaped_text(self) -> None:
+    def test_story_maps_context_structure_bullets_and_escaped_text(self) -> None:
         document = ReleaseDocument(
             title="Release <Notes>",
+            repository_name="payments <core> & services",
+            qualifying_change_count=3,
+            change_start_date=date(2026, 1, 3),
+            change_end_date=date(2026, 2, 2),
             sections=(
                 ReleaseSection(
                     title="Customer & Global",
@@ -29,6 +34,16 @@ class PDFStoryTests(unittest.TestCase):
                         ReleaseModuleSummary(
                             "Payments",
                             "- Added café payments\nA paragraph with <unsafe> & text.\n* Fixed ação.",
+                            qualifying_change_count=2,
+                            change_start_date=date(2026, 1, 3),
+                            change_end_date=date(2026, 2, 2),
+                        ),
+                        ReleaseModuleSummary(
+                            "Rewards",
+                            "- Added points.",
+                            qualifying_change_count=1,
+                            change_start_date=date(2026, 1, 12),
+                            change_end_date=date(2026, 1, 12),
                         ),
                     ),
                 ),
@@ -45,18 +60,41 @@ class PDFStoryTests(unittest.TestCase):
             if getattr(paragraph, "bulletText", None) == "•"
         ]
         self.assertEqual(plain_text[0], "Release <Notes>")
+        self.assertIn("Repository: payments <core> & services", plain_text)
+        self.assertIn("Qualifying changes: 3", plain_text)
+        self.assertIn("Change dates (UTC): 2026-01-03 – 2026-02-02", plain_text)
+        self.assertIn("ISO weeks: 2026-W01 – 2026-W06", plain_text)
         self.assertIn("Customer & Global", plain_text)
         self.assertIn("Payments", plain_text)
+        self.assertIn(
+            "2 qualifying changes · 2026-01-03 – 2026-02-02 (UTC)",
+            plain_text,
+        )
+        self.assertIn("Rewards", plain_text)
+        self.assertIn("1 qualifying change · 2026-01-12 (UTC)", plain_text)
         self.assertIn("A paragraph with <unsafe> & text.", plain_text)
-        self.assertEqual(bullet_text, ["Added café payments", "Fixed ação."])
+        self.assertEqual(
+            bullet_text,
+            ["Added café payments", "Fixed ação.", "Added points."],
+        )
+        self.assertTrue(
+            any(
+                "payments &lt;core&gt; &amp; services" in paragraph.text
+                for paragraph in paragraphs
+            )
+        )
         self.assertTrue(
             any("&lt;unsafe&gt; &amp; text." in paragraph.text for paragraph in paragraphs)
         )
 
-    def test_story_renders_no_qualifying_changes_message(self) -> None:
+    def test_story_renders_descriptive_no_qualifying_changes_message(self) -> None:
         story = build_pdf_story(
             ReleaseDocument(
                 title="Release Notes",
+                repository_name="empty-repository",
+                qualifying_change_count=0,
+                change_start_date=None,
+                change_end_date=None,
                 sections=(),
                 empty_message="No qualifying changes.",
             )
@@ -67,7 +105,17 @@ class PDFStoryTests(unittest.TestCase):
             for flowable in story
             if isinstance(flowable, Paragraph)
         ]
-        self.assertEqual(plain_text, ["Release Notes", "No qualifying changes."])
+        self.assertEqual(
+            plain_text,
+            [
+                "Release Notes",
+                "Repository: empty-repository",
+                "Qualifying changes: 0",
+                "No qualifying changes.",
+            ],
+        )
+        self.assertFalse(any(text.startswith("Change dates") for text in plain_text))
+        self.assertFalse(any(text.startswith("ISO weeks") for text in plain_text))
 
 
 class PDFExportTests(unittest.TestCase):
@@ -108,11 +156,21 @@ class PDFExportTests(unittest.TestCase):
 def _document() -> ReleaseDocument:
     return ReleaseDocument(
         title="Release Notes",
+        repository_name="payments",
+        qualifying_change_count=1,
+        change_start_date=date(2026, 1, 3),
+        change_end_date=date(2026, 1, 3),
         sections=(
             ReleaseSection(
                 title="Global Features",
                 modules=(
-                    ReleaseModuleSummary("Payments", "- Added café support"),
+                    ReleaseModuleSummary(
+                        "Payments",
+                        "- Added café support",
+                        qualifying_change_count=1,
+                        change_start_date=date(2026, 1, 3),
+                        change_end_date=date(2026, 1, 3),
+                    ),
                 ),
             ),
         ),

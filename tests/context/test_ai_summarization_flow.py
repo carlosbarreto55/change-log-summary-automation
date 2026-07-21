@@ -1,7 +1,9 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
+from release_notes_generator.commits import ClassifiedCommit
 from release_notes_generator.composition import compose_release_document
 from release_notes_generator.configuration import ModuleConfig, ModuleDefinition
 from release_notes_generator.summarization import summarize_diff_files
@@ -71,6 +73,16 @@ class AISummarizationFlowTests(unittest.TestCase):
                     modules=(
                         ModuleDefinition("Payments", ("PAY:",), "Customer Features"),
                     )
+                ),
+                repository_name="payments",
+                accepted_commits=(
+                    ClassifiedCommit(
+                        "payment",
+                        "approved@example.com",
+                        "PAY: change",
+                        "Payments",
+                        datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+                    ),
                 ),
             )
 

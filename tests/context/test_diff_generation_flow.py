@@ -1,6 +1,7 @@
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,11 +17,11 @@ from release_notes_generator.diffs import generate_diff_files
 class DiffGenerationFlowTests(unittest.TestCase):
     def test_accepted_commits_are_rendered_into_expected_temporary_markdown_files(self) -> None:
         commits = (
-            GitCommit("pix1", "approved@example.com", "Pix: add payment"),
-            GitCommit("gl1", "approved@example.com", "GlobalLoyalty: add rewards"),
-            GitCommit("tol1", "approved@example.com", "TransitOpenLoop: add fare"),
-            GitCommit("bad-author", "unknown@example.com", "Pix: should be ignored"),
-            GitCommit("bad-module", "approved@example.com", "Unknown: should be ignored"),
+            _commit("pix1", "approved@example.com", "Pix: add payment"),
+            _commit("gl1", "approved@example.com", "GlobalLoyalty: add rewards"),
+            _commit("tol1", "approved@example.com", "TransitOpenLoop: add fare"),
+            _commit("bad-author", "unknown@example.com", "Pix: should be ignored"),
+            _commit("bad-module", "approved@example.com", "Unknown: should be ignored"),
         )
         accepted_commits = filter_commits(
             commits,
@@ -61,6 +62,15 @@ class DiffGenerationFlowTests(unittest.TestCase):
                 [call.args[0][-1] for call in run.call_args_list],
                 ["pix1", "gl1", "tol1"],
             )
+
+
+def _commit(commit_hash: str, author_email: str, subject: str) -> GitCommit:
+    return GitCommit(
+        commit_hash,
+        author_email,
+        subject,
+        datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+    )
 
 
 if __name__ == "__main__":

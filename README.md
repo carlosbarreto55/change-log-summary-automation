@@ -11,13 +11,13 @@ For one configured run, the tool:
 1. Loads and validates every referenced JSON file.
 2. Runs `git fetch --prune` and then `git rebase @{u}` in the target worktree.
 3. Finds the newest commit whose subject contains the configured release marker.
-4. Extracts commits from `<marker>..HEAD`, oldest first.
+4. Extracts commits from `<marker>..HEAD`, oldest first, including strict Git author timestamps.
 5. Keeps only commits whose raw Git author email exactly matches the contributor allowlist.
 6. Assigns each remaining commit to the first module whose case-sensitive prefix matches its subject.
 7. Generates one temporary Git diff file per non-empty module.
 8. Splits oversized module diffs into bounded, ordered AI requests.
 9. Reduces chunk summaries within the same module until one module summary remains.
-10. Composes configured sections and modules in JSON order.
+10. Composes configured sections and modules in JSON order with repository, change-count, and UTC date-range context.
 11. Atomically writes one Unicode-capable PDF to the configured local path.
 12. Deletes the temporary diff files after successful generation.
 
@@ -151,9 +151,17 @@ If fetch fails, rebase and all release processing stop. If rebase fails, the too
 The final document contains:
 
 - A release-notes title.
+- The repository name derived from the final component of `repository_path`.
+- The total qualifying-change count and its exact UTC calendar-date range.
+- The corresponding ISO year-week value or range, including the ISO year to avoid ambiguity around New Year.
 - Non-empty configured section headings.
 - Non-empty configured module headings in configured order.
+- Each module's qualifying-change count and exact UTC calendar-date range.
 - AI summary paragraphs and bullet lines.
+
+For example, a report can show `2026-01-03 – 2026-02-02` as its exact range and `2026-W01 – 2026-W06` as supporting week context. A single date or week is shown once rather than repeated as a range. Author timestamps are normalized to UTC before ranges are calculated.
+
+Dates are attached to the report and module scope, not to individual AI-written bullets. One summary bullet can combine multiple commits, so assigning one source date to it would be misleading. When no commits qualify, the header still identifies the repository and shows a zero count, but omits unavailable date and week rows.
 
 ReportLab Platypus renders the structured document with the bundled Vera TrueType font family. Summary lines beginning with `- ` or `* ` become bullets; other non-empty lines become paragraphs. No final Markdown release-notes file is written.
 

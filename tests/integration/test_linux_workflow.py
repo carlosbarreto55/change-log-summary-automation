@@ -2,6 +2,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from datetime import timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -118,6 +119,13 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
         self.assertTrue(all(commit.commit_hash for commit in commits))
         self.assertTrue(all(commit.author_email for commit in commits))
         self.assertTrue(all(commit.subject for commit in commits))
+        self.assertTrue(
+            all(
+                commit.authored_at.tzinfo is not None
+                and commit.authored_at.utcoffset() is not None
+                for commit in commits
+            )
+        )
 
     def test_linux_workflow_filters_verified_contributors_and_prefixes(self) -> None:
         accepted_commits = _accepted_linux_commits(LINUX_REPOSITORY_PATH)
@@ -199,6 +207,12 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
             ):
                 result = ReleaseNotesWorkflow(summary_client=client).run(runtime_config_path)
 
+            accepted_commits = _accepted_linux_commits(repository_path)
+            accepted_dates = tuple(
+                commit.authored_at.astimezone(timezone.utc).date()
+                for commit in accepted_commits
+            )
+
             request_limit = load_ai_config(
                 AI_IT_CONFIG_PATH
             ).max_diff_characters_per_request
@@ -218,18 +232,51 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
                 all(len(payload) <= request_limit for _, payload in client.reduce_calls)
             )
             self.assertEqual(len(documents), 1)
+            document = documents[0]
+            self.assertEqual(document.repository_name, "linux-worktree")
+            self.assertEqual(document.qualifying_change_count, len(accepted_commits))
+            self.assertEqual(document.change_start_date, min(accepted_dates))
+            self.assertEqual(document.change_end_date, max(accepted_dates))
             self.assertEqual(
-                tuple(section.title for section in documents[0].sections),
+                document.change_start_iso_week,
+                _iso_week(min(accepted_dates)),
+            )
+            self.assertEqual(
+                document.change_end_iso_week,
+                _iso_week(max(accepted_dates)),
+            )
+            self.assertEqual(
+                tuple(section.title for section in document.sections),
                 EXPECTED_SECTIONS,
             )
             self.assertEqual(
                 tuple(
                     module.name
-                    for section in documents[0].sections
+                    for section in document.sections
                     for module in section.modules
                 ),
                 EXPECTED_MODULES,
             )
+            for module in (
+                module
+                for section in document.sections
+                for module in section.modules
+            ):
+                module_commits = tuple(
+                    commit
+                    for commit in accepted_commits
+                    if commit.module_name == module.name
+                )
+                module_dates = tuple(
+                    commit.authored_at.astimezone(timezone.utc).date()
+                    for commit in module_commits
+                )
+                self.assertEqual(
+                    module.qualifying_change_count,
+                    len(module_commits),
+                )
+                self.assertEqual(module.change_start_date, min(module_dates))
+                self.assertEqual(module.change_end_date, max(module_dates))
 
 
 def _accepted_linux_commits(repository_path: Path):
@@ -292,6 +339,11 @@ def _temporary_runtime_config(
 
 def _run_command(command: list[str]) -> None:
     subprocess.run(command, capture_output=True, text=True, check=True)
+
+
+def _iso_week(value) -> str:
+    iso_year, iso_week, _ = value.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
 
 
 if __name__ == "__main__":

@@ -112,7 +112,12 @@ class ReleaseNotesWorkflow:
                 ai_config.max_diff_characters_per_request,
             )
 
-        document = compose_release_document(summaries, module_config)
+        document = compose_release_document(
+            summaries,
+            module_config,
+            repository_name=runtime_config.repository_path.name,
+            accepted_commits=accepted_commits,
+        )
         export_release_pdf(document, runtime_config.output_path)
         delete_diff_files(diff_files.values())
         return 0
