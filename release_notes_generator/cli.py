@@ -11,6 +11,7 @@ from release_notes_generator.commits import GitHistoryError
 from release_notes_generator.configuration import ConfigurationError
 from release_notes_generator.diffs import DiffGenerationError
 from release_notes_generator.pdf_export import PDFGenerationError
+from release_notes_generator.repository_safety import RepositorySafetyError
 from release_notes_generator.summarization import AISummarizationError
 from release_notes_generator.workflow import ReleaseNotesWorkflow
 
@@ -29,7 +30,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    workflow = ReleaseNotesWorkflow()
+    workflow = ReleaseNotesWorkflow(
+        warning_handler=lambda warning: print(f"Warning: {warning}", file=sys.stderr)
+    )
     try:
         return workflow.run(args.config)
     except (
@@ -38,6 +41,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         DiffGenerationError,
         AISummarizationError,
         PDFGenerationError,
+        RepositorySafetyError,
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

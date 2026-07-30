@@ -1,10 +1,31 @@
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from release_notes_generator.diffs import DiffGenerationError, delete_diff_files, generate_diff_files
+
+
+def _git_show_call(commit_hash: str):
+    return call(
+        [
+            "git",
+            "-C",
+            "/repo",
+            "show",
+            "--no-ext-diff",
+            "--no-textconv",
+            commit_hash,
+            "--",
+        ],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=False,
+        env={"PATH": "/usr/bin", "GIT_OPTIONAL_LOCKS": "0"},
+    )
 
 
 class DiffGenerationTests(unittest.TestCase):
@@ -32,11 +53,14 @@ class DiffGenerationTests(unittest.TestCase):
             self.assertEqual(files["Pix"].read_text(encoding="utf-8"), "pix diff\n")
             self.assertEqual(files["GlobalLoyalty"].read_text(encoding="utf-8"), "gl diff\n")
 
-    def test_unrelated_module_diffs_are_not_mixed_into_same_temporary_file(self) -> None:
+    def test_frozen_hash_order_and_module_isolation_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir) / "diffs"
 
-            with patch("release_notes_generator.diffs.subprocess.run") as run:
+            with (
+                patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+                patch("release_notes_generator.diffs.subprocess.run") as run,
+            ):
                 run.side_effect = [
                     subprocess.CompletedProcess(args=[], returncode=0, stdout="pix first", stderr=""),
                     subprocess.CompletedProcess(args=[], returncode=0, stdout="pix second", stderr=""),
@@ -57,12 +81,23 @@ class DiffGenerationTests(unittest.TestCase):
                 "pix first\n\npix second\n",
             )
             self.assertEqual(files["TransitOpenLoop"].read_text(encoding="utf-8"), "transit diff\n")
+            self.assertEqual(
+                run.call_args_list,
+                [
+                    _git_show_call("pix1"),
+                    _git_show_call("pix2"),
+                    _git_show_call("tol1"),
+                ],
+            )
 
     def test_empty_groups_do_not_generate_temporary_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir) / "diffs"
 
-            with patch("release_notes_generator.diffs.subprocess.run") as run:
+            with (
+                patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+                patch("release_notes_generator.diffs.subprocess.run") as run,
+            ):
                 run.return_value = subprocess.CompletedProcess(
                     args=[], returncode=0, stdout="gl diff", stderr=""
                 )
@@ -75,23 +110,60 @@ class DiffGenerationTests(unittest.TestCase):
 
             self.assertEqual(set(files), {"GlobalLoyalty"})
             self.assertFalse((output_dir / "diff_pix.md").exists())
-            run.assert_called_once_with(
-                ["git", "-C", "/repo", "show", "gl1"],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                check=False,
-            )
+            self.assertEqual(run.call_args_list, [_git_show_call("gl1")])
 
-    def test_git_show_failure_raises_diff_generation_error(self) -> None:
+    def test_git_show_failure_stops_generation_without_partial_module_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("release_notes_generator.diffs.subprocess.run") as run:
-                run.return_value = subprocess.CompletedProcess(
-                    args=[], returncode=128, stdout="", stderr="bad revision"
+            output_dir = Path(temp_dir)
+            with (
+                patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+                patch("release_notes_generator.diffs.subprocess.run") as run,
+            ):
+                run.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="first", stderr=""),
+                    subprocess.CompletedProcess(
+                        args=[], returncode=128, stdout="", stderr="bad revision"
+                    ),
+                ]
+
+                with self.assertRaisesRegex(DiffGenerationError, "^bad revision$"):
+                    generate_diff_files(
+                        Path("/repo"),
+                        {"Pix": ("first", "missing"), "TransitOpenLoop": ("not-reached",)},
+                        output_dir,
+                    )
+
+            self.assertEqual(
+                run.call_args_list,
+                [_git_show_call("first"), _git_show_call("missing")],
+            )
+            self.assertFalse((output_dir / "diff_pix.md").exists())
+            self.assertFalse((output_dir / "diff_transitopenloop.md").exists())
+
+    def test_write_failure_removes_all_completed_and_partial_diff_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            original_write_text = Path.write_text
+
+            def fail_second_write(path, content, **kwargs):
+                if path.name == "diff_transitopenloop.md":
+                    original_write_text(path, "partial", **kwargs)
+                    raise OSError("disk full")
+                return original_write_text(path, content, **kwargs)
+
+            with (
+                patch("release_notes_generator.diffs._git_show", return_value="diff"),
+                patch.object(Path, "write_text", autospec=True, side_effect=fail_second_write),
+                self.assertRaisesRegex(DiffGenerationError, "Unable to write"),
+            ):
+                generate_diff_files(
+                    Path("/repo"),
+                    {"Pix": ("pix1",), "TransitOpenLoop": ("tol1",)},
+                    output_dir,
                 )
 
-                with self.assertRaises(DiffGenerationError):
-                    generate_diff_files(Path("/repo"), {"Pix": ("missing",)}, Path(temp_dir))
+            self.assertFalse((output_dir / "diff_pix.md").exists())
+            self.assertFalse((output_dir / "diff_transitopenloop.md").exists())
 
     def test_delete_diff_files_removes_generated_files_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

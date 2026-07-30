@@ -59,7 +59,7 @@ class DiffGenerationFlowTests(unittest.TestCase):
                 "transit diff\n",
             )
             self.assertEqual(
-                [call.args[0][-1] for call in run.call_args_list],
+                [call.args[0][-2] for call in run.call_args_list],
                 ["pix1", "gl1", "tol1"],
             )
 

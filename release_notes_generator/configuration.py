@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -17,6 +18,14 @@ from release_notes_generator.paths import (
 
 class ConfigurationError(ValueError):
     """Raised when a JSON configuration file cannot be loaded or used."""
+
+
+class RepositoryUpdateMode(str, Enum):
+    """Supported repository update behavior before release analysis."""
+
+    READ_ONLY = "read_only"
+    REFRESH_REMOTE_REFS = "refresh_remote_refs"
+    LEGACY_IN_PLACE_SYNC = "legacy_in_place_sync"
 
 
 @dataclass(frozen=True)
@@ -72,10 +81,15 @@ class RuntimeConfig:
     repository_path: Path
     user_config_path: Path
     module_config_path: Path
-    release_marker_config_path: Path
+    release_marker_config_path: Optional[Path]
     ai_config_path: Path
     temp_diff_dir: Path
     output_path: Path
+    head_ref: str
+    base_ref: Optional[str]
+    repository_update_mode: RepositoryUpdateMode = RepositoryUpdateMode.READ_ONLY
+    refresh_remote: Optional[str] = None
+    refresh_refspecs: tuple[str, ...] = ()
     env_file_path: Optional[Path] = None
 
 
@@ -85,6 +99,25 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
     data = _load_json_object(path)
     base_dir = path.resolve(strict=False).parent
 
+    head_ref = _required_non_blank_string(data, "head_ref")
+    base_ref = _optional_non_blank_string(data, "base_ref")
+    release_marker_config_path = _optional_selector_path(
+        data,
+        "release_marker_config_path",
+        base_dir,
+    )
+    if (base_ref is None) == (release_marker_config_path is None):
+        raise ConfigurationError(
+            "Runtime configuration must define exactly one of base_ref or "
+            "release_marker_config_path."
+        )
+
+    repository_update_mode = _repository_update_mode(data)
+    refresh_remote, refresh_refspecs = _refresh_configuration(
+        data,
+        repository_update_mode,
+    )
+
     output_path = _required_path(data, "output_path", base_dir)
     if output_path.suffix.lower() != ".pdf":
         raise ConfigurationError("Runtime configuration output_path must be a .pdf file.")
@@ -93,14 +126,15 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
         repository_path=_required_path(data, "repository_path", base_dir),
         user_config_path=_required_path(data, "user_config_path", base_dir),
         module_config_path=_required_path(data, "module_config_path", base_dir),
-        release_marker_config_path=_required_path(
-            data,
-            "release_marker_config_path",
-            base_dir,
-        ),
+        release_marker_config_path=release_marker_config_path,
         ai_config_path=_required_path(data, "ai_config_path", base_dir),
         temp_diff_dir=_required_path(data, "temp_diff_dir", base_dir),
         output_path=output_path,
+        head_ref=head_ref,
+        base_ref=base_ref,
+        repository_update_mode=repository_update_mode,
+        refresh_remote=refresh_remote,
+        refresh_refspecs=refresh_refspecs,
         env_file_path=_optional_path(data, "env_file_path", base_dir),
     )
 
@@ -151,7 +185,7 @@ def load_release_marker_config(
     """Load the commit-message marker that identifies releases."""
     data = _load_json_object(config_path)
     marker = data.get("marker")
-    if not isinstance(marker, str) or not marker:
+    if not isinstance(marker, str) or not marker.strip():
         raise ConfigurationError("Release marker configuration must define a marker string.")
     return ReleaseMarkerConfig(marker=marker)
 
@@ -223,9 +257,86 @@ def _is_non_empty_string_list(value: object) -> bool:
     )
 
 
+def _required_non_blank_string(data: Mapping[str, Any], field_name: str) -> str:
+    value = data.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(
+            f"Runtime configuration must define {field_name} as a non-empty string."
+        )
+    return value
+
+
+def _optional_non_blank_string(
+    data: Mapping[str, Any],
+    field_name: str,
+) -> Optional[str]:
+    if field_name not in data:
+        return None
+    return _required_non_blank_string(data, field_name)
+
+
+def _repository_update_mode(data: Mapping[str, Any]) -> RepositoryUpdateMode:
+    value = data.get("repository_update_mode", RepositoryUpdateMode.READ_ONLY.value)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(
+            "Runtime configuration repository_update_mode must be a non-empty string."
+        )
+    try:
+        return RepositoryUpdateMode(value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"Unknown repository_update_mode: {value}"
+        ) from exc
+
+
+def _refresh_configuration(
+    data: Mapping[str, Any],
+    repository_update_mode: RepositoryUpdateMode,
+) -> tuple[Optional[str], tuple[str, ...]]:
+    refresh_fields = ("refresh_remote", "refresh_refspecs")
+    if repository_update_mode is not RepositoryUpdateMode.REFRESH_REMOTE_REFS:
+        if any(field_name in data for field_name in refresh_fields):
+            raise ConfigurationError(
+                "Runtime configuration refresh fields are only valid for "
+                "refresh_remote_refs mode."
+            )
+        return None, ()
+
+    refresh_remote = _required_non_blank_string(data, "refresh_remote")
+    refresh_refspecs = data.get("refresh_refspecs")
+    if not isinstance(refresh_refspecs, list) or not refresh_refspecs:
+        raise ConfigurationError(
+            "Runtime configuration must define refresh_refspecs as a non-empty list."
+        )
+
+    destination_prefix = f"refs/remotes/{refresh_remote}/"
+    for refspec in refresh_refspecs:
+        if not isinstance(refspec, str) or not refspec.strip():
+            raise ConfigurationError(
+                "Runtime configuration refresh_refspecs must contain non-empty strings."
+            )
+        if refspec.count(":") != 1:
+            raise ConfigurationError(
+                "Each refresh refspec must define an explicit source:destination."
+            )
+        source, destination = refspec.split(":")
+        source_without_force = source.removeprefix("+")
+        if not source_without_force.strip() or not destination.strip():
+            raise ConfigurationError(
+                "Each refresh refspec must define a non-empty source and destination."
+            )
+        if not destination.startswith(destination_prefix):
+            raise ConfigurationError(
+                "Refresh refspec destinations must be under the configured remote's "
+                "tracking namespace."
+            )
+
+    return refresh_remote, tuple(refresh_refspecs)
+
+
 def _required_path(data: Mapping[str, Any], field_name: str, base_dir: Path) -> Path:
     value = data.get(field_name)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(
             f"Runtime configuration must define {field_name} as a string."
         )
@@ -236,11 +347,21 @@ def _optional_path(data: Mapping[str, Any], field_name: str, base_dir: Path) -> 
     value = data.get(field_name)
     if value is None:
         return None
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(
             f"Runtime configuration {field_name} must be a string when provided."
         )
     return _resolve_path(value, base_dir)
+
+
+def _optional_selector_path(
+    data: Mapping[str, Any],
+    field_name: str,
+    base_dir: Path,
+) -> Optional[Path]:
+    if field_name not in data:
+        return None
+    return _required_path(data, field_name, base_dir)
 
 
 def _resolve_path(value: str, base_dir: Path) -> Path:

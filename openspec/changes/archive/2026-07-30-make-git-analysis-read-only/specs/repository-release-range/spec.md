@@ -1,8 +1,4 @@
-## Purpose
-
-Define how explicit JSON selectors are frozen into an immutable release commit range after any requested repository update.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Release boundary is loaded from JSON
 The system SHALL load a non-empty explicit head ref and exactly one lower-boundary selector from JSON: either a non-empty explicit base ref or a release-marker JSON file containing a non-empty `marker` string. It SHALL validate selector exclusivity before updating or analyzing the target repository.
@@ -49,3 +45,15 @@ The system SHALL resolve the configured head ref and selected lower boundary to 
 #### Scenario: Marker does not exist
 - **WHEN** no reachable commit subject between the frozen head and its ancestors contains the configured marker
 - **THEN** the system reports the missing marker, returns a nonzero exit status, and performs no diff, AI, or PDF work
+
+## REMOVED Requirements
+
+### Requirement: Repository is fetched and rebased before analysis
+**Reason**: Mandatory in-place synchronization can rewrite local history and modify a developer's source worktree, and it prevents safe analysis of explicit refs.
+
+**Migration**: Configure an explicit head ref and one base ref or marker selector. Use the read-only default, explicitly request named remote-ref refresh when current remote data is required, or explicitly select guarded legacy in-place synchronization when rebasing the checkout is required.
+
+### Requirement: Failed rebase is recovered and reported
+**Reason**: Rebase is no longer part of the default release-range behavior, so unconditional rebase recovery does not belong to this capability.
+
+**Migration**: Default and remote-refresh runs require no rebase recovery. The explicitly selected legacy in-place synchronization mode retains abort and error-reporting behavior under the `read-only-repository-analysis` capability.
