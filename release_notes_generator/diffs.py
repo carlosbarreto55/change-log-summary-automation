@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -23,15 +24,25 @@ def generate_diff_files(
     output_path.mkdir(parents=True, exist_ok=True)
 
     generated_files: dict[str, Path] = {}
-    for module_name, commit_hashes in grouped_commit_hashes.items():
-        hashes = tuple(commit_hashes)
-        if not hashes:
-            continue
+    attempted_files: list[Path] = []
+    try:
+        for module_name, commit_hashes in grouped_commit_hashes.items():
+            hashes = tuple(commit_hashes)
+            if not hashes:
+                continue
 
-        diff_file_path = output_path / _diff_file_name(module_name)
-        diff_outputs = [_git_show(repository_path, commit_hash) for commit_hash in hashes]
-        diff_file_path.write_text(_join_diff_outputs(diff_outputs), encoding="utf-8")
-        generated_files[module_name] = diff_file_path
+            diff_file_path = output_path / _diff_file_name(module_name)
+            attempted_files.append(diff_file_path)
+            diff_outputs = [_git_show(repository_path, commit_hash) for commit_hash in hashes]
+            diff_file_path.write_text(_join_diff_outputs(diff_outputs), encoding="utf-8")
+            generated_files[module_name] = diff_file_path
+    except (OSError, DiffGenerationError) as exc:
+        delete_diff_files(attempted_files)
+        if isinstance(exc, DiffGenerationError):
+            raise
+        raise DiffGenerationError(
+            f"Unable to write temporary diff files under: {output_path}"
+        ) from exc
 
     return generated_files
 
@@ -50,11 +61,21 @@ def delete_diff_files(diff_files: Iterable[Path]) -> None:
 
 def _git_show(repository_path: Path, commit_hash: str) -> str:
     result = subprocess.run(
-        ["git", "-C", str(repository_path), "show", commit_hash],
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "show",
+            "--no-ext-diff",
+            "--no-textconv",
+            commit_hash,
+            "--",
+        ],
         capture_output=True,
         text=True,
         errors="replace",
         check=False,
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
     )
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "git show failed."

@@ -8,18 +8,20 @@ The workflow is configuration-driven: contributor emails, trusted commit prefixe
 
 For one configured run, the tool:
 
-1. Loads and validates every referenced JSON file.
-2. Runs `git fetch --prune` and then `git rebase @{u}` in the target worktree.
-3. Finds the newest commit whose subject contains the configured release marker.
-4. Extracts commits from `<marker>..HEAD`, oldest first, including strict Git author timestamps.
-5. Keeps only commits whose raw Git author email exactly matches the contributor allowlist.
-6. Assigns each remaining commit to the first module whose case-sensitive prefix matches its subject.
-7. Generates one temporary Git diff file per non-empty module.
-8. Splits oversized module diffs into bounded, ordered AI requests.
-9. Reduces chunk summaries within the same module until one module summary remains.
-10. Composes configured sections and modules in JSON order with repository, change-count, and UTC date-range context.
-11. Atomically writes one Unicode-capable PDF to the configured local path.
-12. Deletes the temporary diff files after successful generation.
+1. Loads the runtime JSON and every referenced JSON file, loading the release-marker JSON only when marker mode is selected.
+2. Canonicalizes the Git worktree and validates that temporary analysis paths are external to it.
+3. Inspects the checkout and reports dirty, detached, upstream-relationship, and remote-freshness diagnostics.
+4. Applies the selected repository update mode; the default `read_only` mode performs no network or repository update.
+5. Resolves the configured head and exactly one lower boundary to immutable full commit SHAs.
+6. Extracts commits from `<base_sha>..<head_sha>`, oldest first, including strict Git author timestamps.
+7. Keeps only commits whose raw Git author email exactly matches the contributor allowlist.
+8. Assigns each remaining commit to the first module whose case-sensitive prefix matches its subject.
+9. Generates one temporary Git diff file per non-empty module from the frozen commit SHAs.
+10. Splits oversized module diffs into bounded, ordered AI requests.
+11. Reduces chunk summaries within the same module until one module summary remains.
+12. Composes configured sections and modules in JSON order with repository, change-count, and UTC date-range context.
+13. Atomically writes one Unicode-capable PDF to the configured local path.
+14. Deletes temporary diff files after either success or downstream failure.
 
 Unauthorized authors and unmapped prefixes are discarded before diff generation, so their source changes never reach the AI client.
 
@@ -27,8 +29,11 @@ Unauthorized authors and unmapped prefixes are discarded before diff generation,
 
 - Python 3.9 or newer.
 - Git available on the host machine.
-- A local target worktree whose current branch tracks an upstream branch.
+- A local Git worktree containing the configured boundary commits.
 - An OpenAI-compatible API key when qualifying changes require summarization.
+
+An attached branch with a resolvable upstream is required only for the explicitly
+selected `legacy_in_place_sync` mode.
 
 ## Installation
 
@@ -56,17 +61,34 @@ The runtime manifest references four other JSON files. Relative paths are resolv
 ```json
 {
   "repository_path": "/absolute/path/to/target/repository",
+  "head_ref": "refs/remotes/origin/main",
+  "base_ref": "refs/tags/v2.0.0",
   "user_config_path": "user.json",
   "module_config_path": "module.json",
-  "release_marker_config_path": "releaseMarker.json",
   "ai_config_path": "ai.json",
-  "temp_diff_dir": "../tmp/diffs",
-  "output_path": "../output/release_notes.pdf",
+  "temp_diff_dir": "/external/analysis/diffs",
+  "output_path": "/external/output/release_notes.pdf",
   "env_file_path": "../.env.local"
 }
 ```
 
-`output_path` is required to end in `.pdf`. Its parent directories are created automatically. The PDF is rendered to a temporary sibling file and replaces the destination atomically only after rendering succeeds.
+`head_ref` is required and must be non-empty. Configure exactly one lower
+boundary:
+
+- `base_ref` for an explicit ref or commit, as above; or
+- `release_marker_config_path` for the marker JSON described below.
+
+Omitting `repository_update_mode` intentionally selects `read_only`.
+`temp_diff_dir` must resolve outside the analyzed worktree in every mode.
+`output_path` must end in `.pdf` and must also resolve outside the worktree in
+`read_only` and `refresh_remote_refs` modes. Existing symlink aliases and
+nonexistent suffixes beneath symlinked ancestors are canonicalized before these
+checks. Destination directories are created only after configuration, path,
+preflight, update, and range resolution succeed, then their containment is
+revalidated.
+
+The PDF is rendered to a temporary sibling file and replaces the destination
+atomically only after rendering succeeds.
 
 ### Contributors
 
@@ -111,13 +133,28 @@ A tag is a trusted, case-sensitive subject prefix. The first matching module win
 
 ### Release boundary
 
+Marker mode uses a runtime selector:
+
+```json
+{
+  "head_ref": "refs/remotes/origin/main",
+  "release_marker_config_path": "releaseMarker.json"
+}
+```
+
+The referenced marker file contains:
+
 ```json
 {
   "marker": "Linux 7.1"
 }
 ```
 
-The newest reachable commit whose subject contains this non-empty string is the exclusive lower boundary. The upper boundary is the successfully rebased `HEAD`.
+The configured head is resolved first. The newest commit reachable from that
+frozen head whose subject contains the non-empty marker is the exclusive lower
+boundary. Marker matches in commit bodies are ignored. In explicit-base mode,
+both configured refs are resolved once. All later logs and shows use only the
+frozen SHAs and derived commit SHAs, never ambient `HEAD`.
 
 ### AI settings
 
@@ -135,16 +172,64 @@ The newest reachable commit whose subject contains this non-empty string is the 
 
 The JSON stores only the name of the API-key environment variable. The secret itself can be provided through the process environment or the ignored local env file.
 
-## Repository Synchronization and Recovery
+## Repository State and Update Modes
 
-All configuration is validated before the target worktree is changed. The mandatory synchronization sequence is:
+The default mode is read-only:
 
-```bash
-git -C <repository_path> fetch --prune
-git -C <repository_path> rebase @{u}
+```json
+{
+  "repository_update_mode": "read_only"
+}
 ```
 
-If fetch fails, rebase and all release processing stop. If rebase fails, the tool preserves Git's original error, attempts `git rebase --abort`, reports the abort outcome, and stops before marker lookup, diff generation, AI requests, or PDF output. If abort also fails, the message warns that manual repository recovery may be required.
+This performs no fetch, checkout, switch, reset, merge, pull, or rebase. Dirty
+and detached checkouts are allowed because analysis reads committed objects by
+SHA. Staged, unstaged, and untracked content is diagnosed but never included in
+diffs. Equality between a local branch and its local remote-tracking ref does
+not prove the remote server is current, so remote freshness remains explicitly
+unknown.
+
+To update only named remote-tracking refs before freezing boundaries:
+
+```json
+{
+  "repository_update_mode": "refresh_remote_refs",
+  "refresh_remote": "origin",
+  "refresh_refspecs": [
+    "+refs/heads/main:refs/remotes/origin/main"
+  ]
+}
+```
+
+The fetch uses exactly the configured remote and refspecs, disables tag
+following, and does not write `FETCH_HEAD`. RefSpec destinations must be inside
+`refs/remotes/<refresh_remote>/`. Only named destinations are reported fresh as
+of that successful fetch; freshness of all other refs remains unknown. A fetch
+failure stops before either boundary is resolved.
+
+The compatibility mode is explicit:
+
+```json
+{
+  "repository_update_mode": "legacy_in_place_sync"
+}
+```
+
+Before any mutation, this mode requires a clean attached checkout with a
+resolvable upstream. It then runs `git fetch --prune` followed by
+`git rebase @{upstream}`. A fetch failure skips the rebase. A rebase failure
+preserves Git's original error, attempts `git rebase --abort`, reports an abort
+failure separately, and stops all downstream work.
+
+### Migrating existing runtime JSON
+
+Configurations that previously relied on implicit `HEAD` and a marker path must
+add an explicit `head_ref`. Keep `release_marker_config_path` to retain marker
+selection, or replace it with a non-empty `base_ref`; do not configure both.
+Existing workflows that depended on automatic fetch/rebase must intentionally
+select `legacy_in_place_sync`, or preferably select `refresh_remote_refs` with
+an explicit remote and remote-tracking refspec. Move temporary diffs and, for
+read-only or refresh mode, PDF output outside the analyzed worktree.
 
 ## PDF Output
 
@@ -173,11 +258,16 @@ Integration tests use the public Linux kernel repository as a large brownfield f
 git clone git@github.com:torvalds/linux.git /Users/carloseduardo/Downloads/Project/linux
 ```
 
-This is a separately managed, multi-gigabyte fixture. Tests skip clearly when it is absent and never mutate it. Fetch/rebase tests create a temporary shared-object clone with a sparse worktree, perform all synchronization there, and remove that temporary clone afterward.
+This is a separately managed, multi-gigabyte fixture. Tests skip clearly when
+it is absent and never mutate it. Direct fixture tests use default read-only
+analysis with exact before/after snapshots. Refresh and fetch/rebase tests
+create temporary shared-object clones with sparse worktrees and remove those
+clones afterward.
 
 The committed Linux integration JSON uses:
 
-- Release marker `Linux 7.1` (15,875 commits to `HEAD` when verified).
+- Explicit head `b95f03f04d475aa6719d15a636ddf32222d55657`.
+- Release marker `Linux 7.1` (15,875 commits in the configured frozen range).
 - Five exact contributor emails.
 - High-volume prefixes `wifi:`, `KVM:`, `ksmbd:`, `ASoC:`, and `net:`.
 - 368 accepted commits when verified.

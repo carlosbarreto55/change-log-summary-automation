@@ -17,7 +17,8 @@ class MainEntrypointTests(unittest.TestCase):
             result = main(["--config", "workflow.json"])
 
         self.assertEqual(result, 0)
-        workflow_cls.assert_called_once_with()
+        workflow_cls.assert_called_once()
+        self.assertIn("warning_handler", workflow_cls.call_args.kwargs)
         workflow.run.assert_called_once_with(Path("workflow.json"))
 
     def test_main_requires_config_path(self) -> None:
@@ -25,6 +26,24 @@ class MainEntrypointTests(unittest.TestCase):
             main([])
 
         self.assertEqual(error.exception.code, 2)
+
+    def test_main_prints_workflow_diagnostics_as_warnings(self) -> None:
+        standard_error = StringIO()
+        with (
+            patch("release_notes_generator.cli.ReleaseNotesWorkflow") as workflow_cls,
+            patch("sys.stderr", standard_error),
+        ):
+            workflow_cls.return_value.run.return_value = 0
+
+            result = main(["--config", "workflow.json"])
+            warning_handler = workflow_cls.call_args.kwargs["warning_handler"]
+            warning_handler("Remote freshness is unknown.")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            standard_error.getvalue(),
+            "Warning: Remote freshness is unknown.\n",
+        )
 
     def test_main_reports_expected_workflow_error_without_traceback(self) -> None:
         standard_error = StringIO()

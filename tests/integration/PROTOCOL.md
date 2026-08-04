@@ -16,7 +16,10 @@ Keep a separately managed clone at:
 
 `/Users/carloseduardo/Downloads/Project/linux`
 
-The integration suite never creates, fetches, rebases, resets, or otherwise mutates this external fixture. If the fixture is missing or is not a Git repository, Linux integration tests skip with a clear setup message.
+The integration suite analyzes this fixture directly only in default read-only
+mode. It never creates, fetches, rebases, resets, or otherwise mutates the
+fixture. If the fixture is missing or is not a Git repository, Linux integration
+tests skip with a clear setup message.
 
 The fixture is intentionally large. GitHub's Linux history contains more than 1.4 million commits, and a nominally shallow clone can still retain the full graph because of its dense merge ancestry. Setup is a separate manual operation:
 
@@ -24,21 +27,54 @@ The fixture is intentionally large. GitHub's Linux history contains more than 1.
 git clone git@github.com:torvalds/linux.git /Users/carloseduardo/Downloads/Project/linux
 ```
 
-On case-insensitive filesystems, checkout can report Linux paths that differ only by case. Tests avoid relying on the fixture worktree and read its Git object database instead.
+On case-insensitive filesystems, checkout can report Linux paths that differ
+only by case. The read-only workflow accepts the fixture's existing checkout
+state and reads analysis input only from frozen commit objects.
+
+## Direct Fixture State Proof
+
+Class setup records a baseline containing:
+
+- every ref name and object ID;
+- symbolic or detached `HEAD` and its commit SHA;
+- raw index bytes, mode, timestamp, size, and `write-tree` result;
+- porcelain-v2 status and in-progress operation files, including `FETCH_HEAD`;
+- every non-Git worktree path's type, mode, symlink target, and content hash.
+
+Each test teardown takes the same snapshot and requires exact equality. For
+scalability, clean tracked files use their Git blob IDs as content hashes.
+Unstaged, untracked, and ignored files are hashed from their actual bytes, while
+porcelain state separately proves whether tracked content is clean or dirty.
+The snapshot commands disable optional Git locks.
 
 ## Temporary Worktree Safety
 
-Tests that exercise fetch and rebase create a temporary clone derived from the external fixture with `git clone --shared --no-checkout`. They enable a sparse checkout of `Documentation`, populate it with `git read-tree -mu HEAD`, and perform synchronization only in that temporary clone.
+Tests that exercise explicit remote refresh or legacy fetch/rebase create a
+temporary clone derived from the external fixture with
+`git clone --shared --no-checkout`. They enable a sparse checkout of
+`Documentation`, populate it with `git read-tree -mu HEAD`, and perform all
+mutation only in that temporary clone.
 
-The temporary clone has its own branch, index, worktree, and local origin. Shared immutable objects keep setup fast without modifying the fixture. The temporary directory is removed by the test framework after each test.
+The temporary clone has its own refs, branch, index, worktree, and local origin.
+Shared immutable objects keep setup fast without modifying the fixture. Refresh
+tests require `HEAD`, local refs, index, operation state, and worktree inventory
+to remain exact while permitting only the JSON-named remote-tracking ref to
+move. Guarded legacy synchronization is tested only in a clean temporary clone.
+The temporary directory is removed by the test framework after each test.
 
 ## Verified Release Window
 
-The integration release marker is:
+The committed runtime JSON freezes the upper boundary at:
+
+`b95f03f04d475aa6719d15a636ddf32222d55657`
+
+The lower-boundary marker is:
 
 `Linux 7.1`
 
-Its commit is `8cd9520d35a6c38db6567e97dd93b1f11f185dc6`. At verification time, the marker-to-`HEAD` range contained 15,875 commits. Assertions use stable lower bounds because the public fixture can move forward.
+Its commit is `8cd9520d35a6c38db6567e97dd93b1f11f185dc6`.
+The configured frozen range contains 15,875 commits. The fixture may move
+forward independently without changing this reproducible analysis window.
 
 ## Verified Contributors and Prefixes
 
@@ -68,20 +104,30 @@ All integration settings live under `config/`:
 - `moduleIT.json` — Linux prefixes and dynamic PDF sections
 - `releaseMarkerIT.json` — `Linux 7.1`
 - `aiIT.json` — sanitized endpoint/model settings and request character limit
-- `workflowLinuxIT.json` — fixture, temporary diff, and PDF output paths
+- `workflowLinuxIT.json` — fixture path, explicit head, marker selector, and
+  external temporary diff/PDF paths
 
-Runtime code always receives a configuration file path. Full-workflow tests copy the committed workflow JSON into their temporary directory and replace only repository/output paths with test-local absolute paths.
+Runtime code always receives a configuration file path. Each workflow
+integration copies the committed runtime JSON into its framework-managed
+temporary directory and replaces only fields required by that scenario.
+Repository, head, lower-boundary selector, and referenced JSON paths are loaded
+through that runtime JSON rather than hard-coded as ambient Git state. Diffs and
+PDFs are always placed under the test temporary directory.
 
 ## Test Shape
 
 The non-live integration suite covers:
 
 - JSON loading for verified Linux emails, prefixes, sections, marker, and request limit.
-- Marker lookup and a large marker-to-`HEAD` extraction.
+- Marker lookup and a large frozen-SHA range extraction.
 - Exact-email filtering and case-sensitive first-prefix classification.
-- Real fetch/rebase in a temporary derived worktree.
-- Separated diff generation for every configured category.
-- Bounded recording-AI calls, dynamic document sections, atomic PDF generation, and diff cleanup.
+- Direct read-only analysis of the external fixture, including dirty-state
+  warnings and exact fixture preservation on success and forced downstream
+  failure.
+- Scoped remote refresh and guarded legacy fetch/rebase in temporary derived
+  worktrees only.
+- Separated diff generation, bounded recording-AI calls, dynamic document
+  sections, atomic PDF generation, and diff cleanup.
 
 Assertions prefer stable lower thresholds and invariants over exact current counts.
 
@@ -95,4 +141,7 @@ Before a live run, generated content under `tests/assets/` is cleared. A success
 
 ## Generated Assets
 
-Normal full-workflow tests write only inside their framework-managed temporary directory and leave no repository assets behind. Successful workflows delete temporary `diff_*.md` files and retain exactly one final PDF long enough for assertions.
+Normal full-workflow tests write only inside their framework-managed temporary
+directory and leave no analyzed-worktree assets behind. Successful workflows
+delete temporary `diff_*.md` files and retain exactly one final PDF long enough
+for assertions. Forced downstream failures leave neither diffs nor a PDF.
