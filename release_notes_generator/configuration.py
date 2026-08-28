@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Union
 
 from release_notes_generator.paths import (
     DEFAULT_AI_CONFIG_PATH,
@@ -63,15 +63,42 @@ class ReleaseMarkerConfig:
     marker: str
 
 
+class AIBackend(str, Enum):
+    """Supported AI summarization backends selectable in JSON configuration."""
+
+    OPENAI_COMPATIBLE = "openai_compatible"
+    CLAUDE_CODE = "claude_code"
+
+
 @dataclass(frozen=True)
-class AIConfig:
-    """AI API settings loaded from JSON configuration without secret values."""
+class OpenAICompatibleAIConfig:
+    """OpenAI-compatible AI settings loaded from JSON without secret values."""
 
     api_url: str
     model: str
     api_key_env_var: str
     prompt: str
     max_diff_characters_per_request: int
+
+    @property
+    def backend(self) -> AIBackend:
+        return AIBackend.OPENAI_COMPATIBLE
+
+
+@dataclass(frozen=True)
+class ClaudeCodeAIConfig:
+    """Keyless Claude Code AI settings loaded from JSON configuration."""
+
+    model: str
+    prompt: str
+    max_diff_characters_per_request: int
+
+    @property
+    def backend(self) -> AIBackend:
+        return AIBackend.CLAUDE_CODE
+
+
+AIConfig = Union[OpenAICompatibleAIConfig, ClaudeCodeAIConfig]
 
 
 @dataclass(frozen=True)
@@ -191,24 +218,70 @@ def load_release_marker_config(
 
 
 def load_ai_config(config_path: Path = DEFAULT_AI_CONFIG_PATH) -> AIConfig:
-    """Load AI API settings from JSON while keeping secrets in the environment."""
+    """Load backend-specific AI settings from JSON while keeping secrets outside it."""
     data = _load_json_object(config_path)
     if "api_key" in data:
         raise ConfigurationError(
             "AI configuration must reference api_key_env_var instead of storing api_key."
         )
 
+    backend = _ai_backend(data)
+    if backend is AIBackend.CLAUDE_CODE:
+        return _claude_code_ai_config(data)
+    return _openai_compatible_ai_config(data)
+
+
+def _ai_backend(data: Mapping[str, Any]) -> AIBackend:
+    value = data.get("backend", AIBackend.OPENAI_COMPATIBLE.value)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(
+            "AI configuration backend must be a non-empty string when provided."
+        )
+    try:
+        return AIBackend(value)
+    except ValueError as exc:
+        raise ConfigurationError(f"Unsupported AI configuration backend: {value}") from exc
+
+
+def _openai_compatible_ai_config(data: Mapping[str, Any]) -> OpenAICompatibleAIConfig:
     api_url = data.get("api_url")
-    model = data.get("model")
     api_key_env_var = data.get("api_key_env_var")
-    prompt = data.get("prompt")
-    max_diff_characters_per_request = data.get("max_diff_characters_per_request")
     if not isinstance(api_url, str) or not api_url:
         raise ConfigurationError("AI configuration must define an api_url string.")
-    if not isinstance(model, str) or not model:
-        raise ConfigurationError("AI configuration must define a model string.")
     if not isinstance(api_key_env_var, str) or not api_key_env_var:
         raise ConfigurationError("AI configuration must define an api_key_env_var string.")
+
+    model, prompt, max_diff_characters_per_request = _ai_model_prompt_and_limit(data)
+    return OpenAICompatibleAIConfig(
+        api_url=api_url,
+        model=model,
+        api_key_env_var=api_key_env_var,
+        prompt=prompt,
+        max_diff_characters_per_request=max_diff_characters_per_request,
+    )
+
+
+def _claude_code_ai_config(data: Mapping[str, Any]) -> ClaudeCodeAIConfig:
+    for field_name in ("api_url", "api_key_env_var"):
+        if field_name in data:
+            raise ConfigurationError(
+                f"AI configuration {field_name} is not valid for the claude_code backend."
+            )
+
+    model, prompt, max_diff_characters_per_request = _ai_model_prompt_and_limit(data)
+    return ClaudeCodeAIConfig(
+        model=model,
+        prompt=prompt,
+        max_diff_characters_per_request=max_diff_characters_per_request,
+    )
+
+
+def _ai_model_prompt_and_limit(data: Mapping[str, Any]) -> tuple[str, str, int]:
+    model = data.get("model")
+    prompt = data.get("prompt")
+    max_diff_characters_per_request = data.get("max_diff_characters_per_request")
+    if not isinstance(model, str) or not model:
+        raise ConfigurationError("AI configuration must define a model string.")
     if not isinstance(prompt, str) or not prompt:
         raise ConfigurationError("AI configuration must define a prompt string.")
     if (
@@ -220,14 +293,7 @@ def load_ai_config(config_path: Path = DEFAULT_AI_CONFIG_PATH) -> AIConfig:
             "AI configuration must define max_diff_characters_per_request "
             "as a positive integer."
         )
-
-    return AIConfig(
-        api_url=api_url,
-        model=model,
-        api_key_env_var=api_key_env_var,
-        prompt=prompt,
-        max_diff_characters_per_request=max_diff_characters_per_request,
-    )
+    return model, prompt, max_diff_characters_per_request
 
 
 def _load_json_object(config_path: Path) -> dict[str, Any]:

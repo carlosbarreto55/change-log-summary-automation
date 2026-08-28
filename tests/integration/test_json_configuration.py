@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from release_notes_generator.configuration import (
+    AIBackend,
     RepositoryUpdateMode,
+    load_ai_config,
     load_release_marker_config,
     load_runtime_config,
 )
@@ -51,6 +54,26 @@ class CommittedRuntimeConfigurationTests(unittest.TestCase):
                             config.release_marker_config_path
                         ).marker.strip()
                     )
+
+    def test_integration_ai_json_names_its_backend_explicitly(self) -> None:
+        ai_path = CONFIG_DIR / "aiIT.json"
+        raw = json.loads(ai_path.read_text(encoding="utf-8"))
+        config = load_ai_config(ai_path)
+
+        self.assertEqual(raw.get("backend"), "openai_compatible")
+        self.assertEqual(config.backend, AIBackend.OPENAI_COMPATIBLE)
+        self.assertNotIn("api_key", raw)
+
+    def test_legacy_no_backend_ai_json_retains_openai_compatible_behavior(self) -> None:
+        legacy_path = CONFIG_DIR / "aiLegacyNoBackendIT.json"
+        raw = json.loads(legacy_path.read_text(encoding="utf-8"))
+        config = load_ai_config(legacy_path)
+
+        self.assertNotIn("backend", raw)
+        self.assertEqual(config.backend, AIBackend.OPENAI_COMPATIBLE)
+        self.assertTrue(config.api_url)
+        self.assertTrue(config.api_key_env_var)
+        self.assertNotIn("api_key", raw)
 
     def test_linux_runtime_intentionally_uses_omitted_read_only_default(
         self,

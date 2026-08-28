@@ -25,9 +25,9 @@ from release_notes_generator.diffs import delete_diff_files, generate_diff_files
 from release_notes_generator.pdf_export import export_release_pdf
 from release_notes_generator.repository_safety import validate_analysis_paths
 from release_notes_generator.summarization import (
-    OpenAIChatClient,
     SummaryClient,
-    summarize_diff_files,
+    create_summary_client,
+    summarize_diff_files_with_provenance,
 )
 
 
@@ -141,15 +141,16 @@ class ReleaseNotesWorkflow:
 
             summaries = {}
             if diff_files:
-                client = self._summary_client or OpenAIChatClient.from_config(
+                client = self._summary_client or create_summary_client(
                     ai_config,
                     env_file=runtime_config.env_file_path,
                 )
-                summaries = summarize_diff_files(
+                summarization_outcome = summarize_diff_files_with_provenance(
                     diff_files,
                     client,
                     ai_config.max_diff_characters_per_request,
                 )
+                summaries = summarization_outcome.summaries
 
             document = compose_release_document(
                 summaries,

@@ -3,9 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import dataclasses
+
 from release_notes_generator.configuration import (
+    AIBackend,
+    ClaudeCodeAIConfig,
     ConfigurationError,
     ModuleDefinition,
+    OpenAICompatibleAIConfig,
     RepositoryUpdateMode,
     load_ai_config,
     load_module_config,
@@ -13,6 +18,31 @@ from release_notes_generator.configuration import (
     load_runtime_config,
     load_user_config,
 )
+
+
+def _openai_ai_config_data() -> dict[str, object]:
+    return {
+        "api_url": "https://api.example.test/v1/chat/completions",
+        "model": "summary-model",
+        "api_key_env_var": "CHANGE_LOG_SUMMARY_AI_API_KEY",
+        "prompt": "Summarize this diff.",
+        "max_diff_characters_per_request": 12000,
+    }
+
+
+def _claude_code_ai_config_data() -> dict[str, object]:
+    return {
+        "backend": "claude_code",
+        "model": "claude-sonnet-5",
+        "prompt": "Summarize this diff.",
+        "max_diff_characters_per_request": 12000,
+    }
+
+
+def _load_ai_config_from_data(temp_dir: str, data: dict[str, object]):
+    config_path = Path(temp_dir) / "ai.json"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    return load_ai_config(config_path)
 
 
 def _runtime_config_data() -> dict[str, object]:
@@ -514,6 +544,143 @@ class ConfigurationTests(unittest.TestCase):
 
             with self.assertRaises(ConfigurationError):
                 load_user_config(config_path)
+
+    def test_load_ai_config_defaults_missing_backend_to_openai_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _load_ai_config_from_data(temp_dir, _openai_ai_config_data())
+
+        self.assertIsInstance(config, OpenAICompatibleAIConfig)
+        self.assertEqual(config.backend, AIBackend.OPENAI_COMPATIBLE)
+        self.assertEqual(config.api_url, "https://api.example.test/v1/chat/completions")
+        self.assertEqual(config.model, "summary-model")
+        self.assertEqual(config.api_key_env_var, "CHANGE_LOG_SUMMARY_AI_API_KEY")
+        self.assertEqual(config.prompt, "Summarize this diff.")
+        self.assertEqual(config.max_diff_characters_per_request, 12000)
+
+    def test_load_ai_config_accepts_explicit_openai_compatible_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data = _openai_ai_config_data()
+            data["backend"] = "openai_compatible"
+
+            config = _load_ai_config_from_data(temp_dir, data)
+
+        self.assertIsInstance(config, OpenAICompatibleAIConfig)
+        self.assertEqual(config.backend, AIBackend.OPENAI_COMPATIBLE)
+        self.assertEqual(config.api_url, "https://api.example.test/v1/chat/completions")
+        self.assertEqual(config.model, "summary-model")
+        self.assertEqual(config.api_key_env_var, "CHANGE_LOG_SUMMARY_AI_API_KEY")
+        self.assertEqual(config.prompt, "Summarize this diff.")
+        self.assertEqual(config.max_diff_characters_per_request, 12000)
+
+    def test_openai_compatible_backend_requires_current_fields(self) -> None:
+        required_fields = ("api_url", "model", "api_key_env_var", "prompt")
+        for backend in (None, "openai_compatible"):
+            for field_name in required_fields:
+                for invalid_value in (None, "", 42):
+                    with (
+                        self.subTest(backend=backend, field=field_name, value=invalid_value),
+                        tempfile.TemporaryDirectory() as temp_dir,
+                    ):
+                        data = _openai_ai_config_data()
+                        if backend is not None:
+                            data["backend"] = backend
+                        if invalid_value is None:
+                            data.pop(field_name)
+                        else:
+                            data[field_name] = invalid_value
+
+                        with self.assertRaises(ConfigurationError):
+                            _load_ai_config_from_data(temp_dir, data)
+
+    def test_load_ai_config_accepts_keyless_claude_code_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _load_ai_config_from_data(temp_dir, _claude_code_ai_config_data())
+
+        self.assertIsInstance(config, ClaudeCodeAIConfig)
+        self.assertEqual(config.backend, AIBackend.CLAUDE_CODE)
+        self.assertEqual(config.model, "claude-sonnet-5")
+        self.assertEqual(config.prompt, "Summarize this diff.")
+        self.assertEqual(config.max_diff_characters_per_request, 12000)
+        self.assertFalse(hasattr(config, "api_url"))
+        self.assertFalse(hasattr(config, "api_key_env_var"))
+        self.assertFalse(hasattr(config, "api_key"))
+
+    def test_claude_code_backend_rejects_missing_or_invalid_required_fields(self) -> None:
+        invalid_cases = (
+            ("missing-model", "model", None),
+            ("empty-model", "model", ""),
+            ("non-string-model", "model", 42),
+            ("missing-prompt", "prompt", None),
+            ("empty-prompt", "prompt", ""),
+            ("non-string-prompt", "prompt", ["Summarize."]),
+            ("missing-limit", "max_diff_characters_per_request", None),
+            ("boolean-limit", "max_diff_characters_per_request", True),
+            ("zero-limit", "max_diff_characters_per_request", 0),
+            ("negative-limit", "max_diff_characters_per_request", -1),
+            ("float-limit", "max_diff_characters_per_request", 1.5),
+            ("string-limit", "max_diff_characters_per_request", "1000"),
+        )
+        for name, field_name, invalid_value in invalid_cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                data = _claude_code_ai_config_data()
+                if invalid_value is None:
+                    data.pop(field_name)
+                else:
+                    data[field_name] = invalid_value
+
+                with self.assertRaises(ConfigurationError):
+                    _load_ai_config_from_data(temp_dir, data)
+
+    def test_load_ai_config_rejects_unsupported_backends(self) -> None:
+        for backend in ("anthropic", "openai", "claude", "", "   ", 7, True, None, []):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as temp_dir:
+                data = _openai_ai_config_data()
+                data["backend"] = backend
+
+                with self.assertRaises(ConfigurationError):
+                    _load_ai_config_from_data(temp_dir, data)
+
+    def test_load_ai_config_rejects_inline_secret_for_every_backend(self) -> None:
+        backend_data = (
+            ("legacy-no-backend", _openai_ai_config_data()),
+            (
+                "openai_compatible",
+                {**_openai_ai_config_data(), "backend": "openai_compatible"},
+            ),
+            ("claude_code", _claude_code_ai_config_data()),
+        )
+        for name, data in backend_data:
+            with self.subTest(backend=name), tempfile.TemporaryDirectory() as temp_dir:
+                data["api_key"] = "inline-secret"
+
+                with self.assertRaises(ConfigurationError):
+                    _load_ai_config_from_data(temp_dir, data)
+
+    def test_claude_code_backend_rejects_openai_api_fields(self) -> None:
+        api_fields = (
+            ("api_url", "https://api.example.test/v1/chat/completions"),
+            ("api_key_env_var", "CHANGE_LOG_SUMMARY_AI_API_KEY"),
+        )
+        for field_name, value in api_fields:
+            with self.subTest(field=field_name), tempfile.TemporaryDirectory() as temp_dir:
+                data = _claude_code_ai_config_data()
+                data[field_name] = value
+
+                with self.assertRaises(ConfigurationError):
+                    _load_ai_config_from_data(temp_dir, data)
+
+    def test_backend_configurations_are_immutable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            openai_config = _load_ai_config_from_data(temp_dir, _openai_ai_config_data())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            claude_config = _load_ai_config_from_data(
+                temp_dir, _claude_code_ai_config_data()
+            )
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            openai_config.model = "other-model"
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            claude_config.model = "other-model"
 
     def test_unusable_ai_configuration_raises_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
