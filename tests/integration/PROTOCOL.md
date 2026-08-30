@@ -104,6 +104,8 @@ All integration settings live under `config/`:
 - `moduleIT.json` — Linux prefixes and dynamic PDF sections
 - `releaseMarkerIT.json` — `Linux 7.1`
 - `aiIT.json` — sanitized endpoint/model settings and request character limit
+- `aiClaudeCodeIT.json` — keyless Claude Code backend, model, prompt, and the
+  same request character limit
 - `workflowLinuxIT.json` — fixture path, explicit head, marker selector, and
   external temporary diff/PDF paths
 
@@ -128,6 +130,13 @@ The non-live integration suite covers:
   worktrees only.
 - Separated diff generation, bounded recording-AI calls, dynamic document
   sections, atomic PDF generation, and diff cleanup.
+- A deterministic fake `claude` executable exercised through the production
+  subprocess runner. Its JSONL records contain only the supported version,
+  argument names, standard-input hashes and sizes, process IDs, and empty
+  working-directory facts.
+- Full fake-Claude workflow coverage for bounded initial and reduction calls,
+  fresh-process isolation, secret-free provenance, PDF generation, diff
+  cleanup, and exact fixture preservation.
 
 Assertions prefer stable lower thresholds and invariants over exact current counts.
 
@@ -138,6 +147,22 @@ Live AI integration is skipped unless `RUN_LIVE_AI_IT=1` and the configured API-
 The live test uses one accepted Linux commit per configured module, preserves module separation, applies the configured request bound, redacts authorization headers from inspection assets, and writes generated artifacts only under `tests/assets/`.
 
 Before a live run, generated content under `tests/assets/` is cleared. A successful live run retains its latest sanitized request payloads, diffs, and summaries for manual inspection.
+
+## Optional Live Claude Code Integration
+
+Live Claude Code integration is skipped unless all of these conditions hold:
+
+- `RUN_LIVE_CLAUDE_CODE_IT=1` explicitly opts in;
+- `CLAUDE_CODE_OPERATOR_LOGGED_IN=1` attests that the operator verified login
+  directly with Claude Code;
+- the fixed `claude` executable is available on `PATH`;
+- `claude --version` reports the supported 2.1.251-or-newer contract; and
+- the separately managed Linux fixture is available.
+
+The live test sends one accepted diff per configured module through fresh
+restricted processes. It writes diffs only inside a framework-managed temporary
+directory, deletes them in `finally`, and persists no prompts, diffs, summaries,
+credentials, account identity, environment values, or raw process output.
 
 ## Generated Assets
 

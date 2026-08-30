@@ -1,0 +1,6 @@
+{
+  "backend": "claude_code",
+  "model": "sonnet",
+  "prompt": "Summarize the provided module-specific Linux Git diff for release notes. Return a concise Markdown bullet list focused on user-visible changes.",
+  "max_diff_characters_per_request": 120000
+}

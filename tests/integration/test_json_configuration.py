@@ -64,6 +64,24 @@ class CommittedRuntimeConfigurationTests(unittest.TestCase):
         self.assertEqual(config.backend, AIBackend.OPENAI_COMPATIBLE)
         self.assertNotIn("api_key", raw)
 
+    def test_claude_code_integration_json_is_keyless_and_backend_specific(
+        self,
+    ) -> None:
+        ai_path = CONFIG_DIR / "aiClaudeCodeIT.json"
+        raw = json.loads(ai_path.read_text(encoding="utf-8"))
+        config = load_ai_config(ai_path)
+
+        self.assertEqual(config.backend, AIBackend.CLAUDE_CODE)
+        self.assertEqual(raw.get("backend"), "claude_code")
+        for forbidden_field in (
+            "api_url",
+            "api_key_env_var",
+            "api_key",
+            "oauth_token",
+            "credential_path",
+        ):
+            self.assertNotIn(forbidden_field, raw)
+
     def test_legacy_no_backend_ai_json_retains_openai_compatible_behavior(self) -> None:
         legacy_path = CONFIG_DIR / "aiLegacyNoBackendIT.json"
         raw = json.loads(legacy_path.read_text(encoding="utf-8"))

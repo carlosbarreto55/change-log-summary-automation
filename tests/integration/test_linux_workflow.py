@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from release_notes_generator.claude_code import ClaudeCodeClient
 from release_notes_generator.commits import (
     GitCommitExtractor,
     GitHistoryError,
@@ -22,7 +26,15 @@ from release_notes_generator.configuration import (
 )
 from release_notes_generator.paths import CONFIG_DIR
 from release_notes_generator.pdf_export import export_release_pdf
+from release_notes_generator.summarization import (
+    SummarizationProvenance,
+    summarize_diff_files_with_provenance,
+)
 from release_notes_generator.workflow import ReleaseNotesWorkflow
+from tests.claude_code_harness import (
+    installed_fake_claude,
+    load_fake_claude_records,
+)
 from tests.context.git_state import snapshot_git_state
 from tests.integration.git_fixture_state import snapshot_linux_fixture
 
@@ -32,6 +44,13 @@ EXPECTED_HEAD_SHA = "b95f03f04d475aa6719d15a636ddf32222d55657"
 EXPECTED_MARKER_SHA = "8cd9520d35a6c38db6567e97dd93b1f11f185dc6"
 EXPECTED_MODULES = ("Wi-Fi", "Network Core", "KVM", "ALSA SoC", "KSMBD")
 EXPECTED_SECTIONS = ("Networking", "Virtualization", "Audio", "Filesystems")
+EXPECTED_MODULE_COUNTS = {
+    "Wi-Fi": 112,
+    "Network Core": 33,
+    "KVM": 86,
+    "ALSA SoC": 65,
+    "KSMBD": 72,
+}
 
 
 class RecordingSummaryClient:
@@ -248,6 +267,174 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
                 ),
                 EXPECTED_MODULES,
             )
+
+    def test_fake_claude_real_process_linux_workflow_is_bounded_and_isolated(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            claude_ai_path = CONFIG_DIR / "aiClaudeCodeIT.json"
+            runtime_path = _temporary_runtime_config(
+                temp_root,
+                repository_path=self.linux_repository,
+                overrides={"ai_config_path": str(claude_ai_path)},
+            )
+            runtime_config = load_runtime_config(runtime_path)
+            ai_config = load_ai_config(claude_ai_path)
+            accepted_commits = []
+            request_trace: list[dict[str, object]] = []
+            outcomes = []
+            original_summarize = ClaudeCodeClient.summarize
+            original_reduce = ClaudeCodeClient.reduce
+
+            def recording_filter(commits, approved_emails, module_tags):
+                result = filter_commits(commits, approved_emails, module_tags)
+                accepted_commits.extend(result)
+                return result
+
+            def recording_summarize(client, module_name, diff_content):
+                request_trace.append(
+                    _sanitized_request_trace("summarize", module_name, diff_content)
+                )
+                return original_summarize(client, module_name, diff_content)
+
+            def recording_reduce(client, module_name, partial_summaries):
+                request_trace.append(
+                    _sanitized_request_trace("reduce", module_name, partial_summaries)
+                )
+                return original_reduce(client, module_name, partial_summaries)
+
+            def recording_outcome(*args, **kwargs):
+                outcome = summarize_diff_files_with_provenance(*args, **kwargs)
+                outcomes.append(outcome)
+                return outcome
+
+            fixture_before = snapshot_linux_fixture(self.linux_repository)
+            with (
+                installed_fake_claude(temp_root) as record_path,
+                patch.dict(
+                    os.environ,
+                    {"CLAUDE_TEST_TOKEN": "FAKE-SENSITIVE-ENVIRONMENT-VALUE"},
+                ),
+                patch(
+                    "release_notes_generator.workflow.filter_commits",
+                    side_effect=recording_filter,
+                ),
+                patch.object(
+                    ClaudeCodeClient,
+                    "summarize",
+                    new=recording_summarize,
+                ),
+                patch.object(
+                    ClaudeCodeClient,
+                    "reduce",
+                    new=recording_reduce,
+                ),
+                patch(
+                    "release_notes_generator.workflow."
+                    "summarize_diff_files_with_provenance",
+                    side_effect=recording_outcome,
+                ),
+            ):
+                result = ReleaseNotesWorkflow().run(runtime_path)
+
+            records = load_fake_claude_records(record_path)
+            fixture_after = snapshot_linux_fixture(self.linux_repository)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(fixture_after, fixture_before)
+            self.assertEqual(len(accepted_commits), 368)
+            self.assertEqual(
+                {
+                    module_name: sum(
+                        commit.module_name == module_name
+                        for commit in accepted_commits
+                    )
+                    for module_name in EXPECTED_MODULES
+                },
+                EXPECTED_MODULE_COUNTS,
+            )
+            self.assertEqual(
+                {commit.author_email for commit in accepted_commits},
+                set(load_user_config(runtime_config.user_config_path).approved_author_emails),
+            )
+
+            self.assertTrue(
+                any(entry["kind"] == "summarize" for entry in request_trace)
+            )
+            self.assertTrue(any(entry["kind"] == "reduce" for entry in request_trace))
+            requested_modules = tuple(
+                dict.fromkeys(entry["module"] for entry in request_trace)
+            )
+            self.assertEqual(set(requested_modules), set(EXPECTED_MODULES))
+            self.assertEqual(len(requested_modules), len(EXPECTED_MODULES))
+            self.assertTrue(
+                all(
+                    entry["content_size"]
+                    <= ai_config.max_diff_characters_per_request
+                    for entry in request_trace
+                )
+            )
+            for module_name in EXPECTED_MODULES:
+                module_kinds = [
+                    entry["kind"]
+                    for entry in request_trace
+                    if entry["module"] == module_name
+                ]
+                if "reduce" in module_kinds:
+                    first_reduce = module_kinds.index("reduce")
+                    self.assertNotIn("summarize", module_kinds[first_reduce:])
+
+            self.assertEqual(records[0]["argument_names"], ["--version"])
+            request_records = records[1:]
+            self.assertEqual(len(request_records), len(request_trace))
+            self.assertEqual(
+                [record["payload_sha256"] for record in request_records],
+                [entry["stdin_sha256"] for entry in request_trace],
+            )
+            self.assertEqual(
+                len({record["process_id"] for record in records}),
+                len(records),
+            )
+            self.assertTrue(
+                all(record["working_directory"]["is_empty"] for record in records)
+            )
+            self.assertTrue(
+                all(
+                    not record["working_directory"]["contains_git_entry"]
+                    for record in records
+                )
+            )
+
+            self.assertEqual(len(outcomes), 1)
+            provenance = outcomes[0].provenance
+            self.assertEqual(
+                provenance,
+                SummarizationProvenance(
+                    backend="claude_code",
+                    model=ai_config.model,
+                    claude_code_version="2.1.251",
+                ),
+            )
+            self.assertEqual(
+                {field.name for field in dataclasses.fields(provenance)},
+                {"backend", "model", "claude_code_version"},
+            )
+            sanitized_artifacts = record_path.read_text(encoding="utf-8") + json.dumps(
+                dataclasses.asdict(provenance), sort_keys=True
+            )
+            self.assertNotIn("FAKE-SENSITIVE-ENVIRONMENT-VALUE", sanitized_artifacts)
+            for forbidden_name in (
+                "api_key",
+                "oauth",
+                "authorization",
+                "credential",
+                "environment",
+            ):
+                self.assertNotIn(forbidden_name, sanitized_artifacts.lower())
+
+            self.assertEqual(runtime_config.output_path.read_bytes()[:5], b"%PDF-")
+            self.assertEqual(tuple(runtime_config.temp_diff_dir.glob("diff_*.md")), ())
 
     def test_direct_linux_downstream_failure_preserves_fixture_and_writes_no_output(
         self,
@@ -501,6 +688,22 @@ def _non_header_status(status: str) -> tuple[str, ...]:
     return tuple(
         line for line in status.splitlines() if not line.startswith("# ")
     )
+
+
+def _sanitized_request_trace(
+    kind: str,
+    module_name: str,
+    content: str,
+) -> dict[str, object]:
+    boundary = "Diff" if kind == "summarize" else "Partial summaries"
+    stdin_text = f"Module: {module_name}\n\n{boundary}:\n{content}"
+    return {
+        "kind": kind,
+        "module": module_name,
+        "content_size": len(content),
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "stdin_sha256": hashlib.sha256(stdin_text.encode("utf-8")).hexdigest(),
+    }
 
 
 if __name__ == "__main__":

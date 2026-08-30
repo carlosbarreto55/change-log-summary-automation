@@ -38,26 +38,26 @@
 
 ## 5. Exercise the Real Subprocess Boundary and Linux Workflow
 
-- [ ] 5.1 Add a deterministic fake `claude` executable harness that records only version, argument names, payload hashes and sizes, process identity, and working-directory facts and returns the supported schema-valid envelope
-- [ ] 5.2 Add context tests using the real subprocess runner and fake executable to prove standard-input transport, inert shell metacharacters, restricted flags, temporary-directory cleanup, and one fresh operating-system process per request
-- [ ] 5.3 Add context tests for fake executable timeout, nonzero exit, malformed result, login-style failure, and usage-limit-style failure, verifying sanitized errors, diff cleanup, and preservation of an existing PDF
-- [ ] 5.4 Add a committed JSON integration configuration selecting `claude_code` for the separately managed public `git@github.com:torvalds/linux.git` fixture, with all generated paths redirected to framework-managed temporary locations
-- [ ] 5.5 Add and run a non-live Linux integration test proving exact author/module filtering, bounded initial and reduction calls, request and process isolation, secret-free provenance, PDF generation, diff cleanup, and unchanged fixture refs, HEAD, index, worktree, and files
-- [ ] 5.6 Add an explicit opt-in live Claude Code Linux integration that skips unless the executable, supported version, operator login, and opt-in flag are present and that stores no prompt, diff, credential, account identity, or raw process output
+- [x] 5.1 Add a deterministic fake `claude` executable harness that records only version, argument names, payload hashes and sizes, process identity, and working-directory facts and returns the supported schema-valid envelope
+- [x] 5.2 Add context tests using the real subprocess runner and fake executable to prove standard-input transport, inert shell metacharacters, restricted flags, temporary-directory cleanup, and one fresh operating-system process per request
+- [x] 5.3 Add context tests for fake executable timeout, nonzero exit, malformed result, login-style failure, and usage-limit-style failure, verifying sanitized errors, diff cleanup, and preservation of an existing PDF
+- [x] 5.4 Add a committed JSON integration configuration selecting `claude_code` for the separately managed public `git@github.com:torvalds/linux.git` fixture, with all generated paths redirected to framework-managed temporary locations
+- [x] 5.5 Add and run a non-live Linux integration test proving exact author/module filtering, bounded initial and reduction calls, request and process isolation, secret-free provenance, PDF generation, diff cleanup, and unchanged fixture refs, HEAD, index, worktree, and files
+- [x] 5.6 Add an explicit opt-in live Claude Code Linux integration that skips unless the executable, supported version, operator login, and opt-in flag are present and that stores no prompt, diff, credential, account identity, or raw process output
 
 ## 6. Reconcile Templates, Draft Provenance, Packaging, and Documentation
 
-- [ ] 6.1 Update README requirements, configuration examples, invocation guidance, supported Claude Code version, authentication ownership, failure recovery, usage-limit behavior, and the warning that keyless Claude Code still transmits approved source content to the configured remote provider
+- [x] 6.1 Update README requirements, configuration examples, invocation guidance, supported Claude Code version, authentication ownership, failure recovery, usage-limit behavior, and the warning that keyless Claude Code still transmits approved source content to the configured remote provider
 - [ ] 6.2 Update packaged and repository AI configuration templates after configuration onboarding is available, with tests proving a Claude Code template contains no endpoint, key-variable name, key, OAuth token, or credential path
 - [ ] 6.3 Reconcile onboarding validation and inspection after that prerequisite merges so both backend shapes receive stable diagnostics and inspection performs no version probe, login check, or inference request
 - [ ] 6.4 Reconcile the release-governance lifecycle after that prerequisite merges so draft artifacts persist backend, requested model, and detected Claude Code version, bind them into draft integrity, and reject credentials or environment values
-- [ ] 6.5 Add or update packaging smoke tests proving the installed wheel can load both backend configurations without a Claude SDK dependency and requires the external executable only when active Claude Code drafting begins
+- [x] 6.5 Add or update packaging smoke tests proving the installed wheel can load both backend configurations without a Claude SDK dependency and requires the external executable only when active Claude Code drafting begins
 
 ## 7. Complete Verification
 
-- [ ] 7.1 Run the complete unit suite and resolve every failure
-- [ ] 7.2 Run the complete context suite and resolve every failure
-- [ ] 7.3 Run the complete non-live integration suite against the public Linux fixture and treat only a documented missing-fixture skip as acceptable
-- [ ] 7.4 Run the opt-in live Claude Code integration when the supported executable, explicit flag, and operator login are available, otherwise record the intentional skip without weakening mandatory coverage
+- [x] 7.1 Run the complete unit suite and resolve every failure
+- [x] 7.2 Run the complete context suite and resolve every failure
+- [x] 7.3 Run the complete non-live integration suite against the public Linux fixture and treat only a documented missing-fixture skip as acceptable
+- [x] 7.4 Run the opt-in live Claude Code integration when the supported executable, explicit flag, and operator login are available, otherwise record the intentional skip without weakening mandatory coverage
 - [ ] 7.5 Build the source distribution and wheel, install the wheel in a clean environment, and run the packaged configuration and CLI smoke tests
-- [ ] 7.6 Run `openspec validate add-claude-code-drafting-backend --type change --strict` and resolve every strict validation error before marking the change complete or committing implementation work
+- [x] 7.6 Run `openspec validate add-claude-code-drafting-backend --type change --strict` and resolve every strict validation error before marking the change complete or committing implementation work
