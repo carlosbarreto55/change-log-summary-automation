@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
+from typing import Optional, Union
+
+
+@dataclass(frozen=True)
+class ReleaseCommitEntry:
+    """One exact subject and full object ID in a deterministic report."""
+
+    subject: str
+    commit_hash: str
 
 
 @dataclass(frozen=True)
@@ -19,11 +27,25 @@ class ReleaseModuleSummary:
 
 
 @dataclass(frozen=True)
+class ReleaseModuleCommitList:
+    """One configured module and its ordered qualifying commits."""
+
+    name: str
+    commits: tuple[ReleaseCommitEntry, ...]
+    qualifying_change_count: int
+    change_start_date: date
+    change_end_date: date
+
+
+ReleaseModuleContent = Union[ReleaseModuleSummary, ReleaseModuleCommitList]
+
+
+@dataclass(frozen=True)
 class ReleaseSection:
     """One configured release-notes section."""
 
     title: str
-    modules: tuple[ReleaseModuleSummary, ...]
+    modules: tuple[ReleaseModuleContent, ...]
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "change-log-summary"
 version = "0.1.0"
-description = "AI-powered automated release notes generator"
+description = "Generate AI summaries or deterministic commit-list PDF reports from Git"
 requires-python = ">=3.9"
 dependencies = ["reportlab>=5,<6"]
 

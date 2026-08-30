@@ -49,6 +49,7 @@ def write_runtime_configuration(
     refresh_refspecs: Sequence[str] = (),
     temp_diff_dir: Optional[Path] = None,
     output_path: Optional[Path] = None,
+    report_mode: Optional[str] = None,
 ) -> Path:
     config_dir = root / "config"
     config_dir.mkdir(exist_ok=True)
@@ -70,28 +71,34 @@ def write_runtime_configuration(
         json.dumps({"marker": "[Release]"}),
         encoding="utf-8",
     )
-    (config_dir / "ai.json").write_text(
-        json.dumps(
-            {
-                "api_url": "https://api.example.test/v1/chat/completions",
-                "model": "summary-model",
-                "api_key_env_var": "CHANGE_LOG_SUMMARY_AI_API_KEY",
-                "prompt": "Summarize release-note diffs.",
-                "max_diff_characters_per_request": 12000,
-            }
-        ),
-        encoding="utf-8",
-    )
+    if report_mode != "commit_list":
+        (config_dir / "ai.json").write_text(
+            json.dumps(
+                {
+                    "api_url": "https://api.example.test/v1/chat/completions",
+                    "model": "summary-model",
+                    "api_key_env_var": "CHANGE_LOG_SUMMARY_AI_API_KEY",
+                    "prompt": "Summarize release-note diffs.",
+                    "max_diff_characters_per_request": 12000,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     runtime_data = {
         "repository_path": str(repository),
         "user_config_path": "user.json",
         "module_config_path": "module.json",
-        "ai_config_path": "ai.json",
-        "temp_diff_dir": str(temp_diff_dir or (root / "analysis" / "diffs")),
         "output_path": str(output_path or (root / "analysis" / "release.pdf")),
         "head_ref": head_ref,
     }
+    if report_mode == "commit_list":
+        runtime_data["report_mode"] = report_mode
+    else:
+        runtime_data["ai_config_path"] = "ai.json"
+        runtime_data["temp_diff_dir"] = str(
+            temp_diff_dir or (root / "analysis" / "diffs")
+        )
     if marker_mode:
         runtime_data["release_marker_config_path"] = "releaseMarker.json"
     else:

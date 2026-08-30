@@ -12,6 +12,7 @@ from release_notes_generator.domain.configuration import (
     ModuleDefinition,
     ModulePolicy,
     OpenAICompatibleAISettings,
+    ReportMode,
     RepositoryUpdateMode,
     WorkflowConfiguration,
 )
@@ -29,6 +30,7 @@ class ConfigurationService:
         path = Path(config_path).expanduser()
         runtime = self._json_reader.read_object(path)
         base_dir = path.resolve(strict=False).parent
+        report_mode = _report_mode(runtime)
 
         head_ref = _required_non_blank_string(runtime, "head_ref")
         base_ref = _optional_non_blank_string(runtime, "base_ref")
@@ -52,9 +54,15 @@ class ConfigurationService:
         repository_path = _required_path(runtime, "repository_path", base_dir)
         user_path = _required_path(runtime, "user_config_path", base_dir)
         module_path = _required_path(runtime, "module_config_path", base_dir)
-        ai_path = _required_path(runtime, "ai_config_path", base_dir)
-        temp_diff_dir = _required_path(runtime, "temp_diff_dir", base_dir)
-        env_file_path = _optional_path(runtime, "env_file_path", base_dir)
+
+        ai = None
+        ai_path = None
+        temp_diff_dir = None
+        env_file_path = None
+        if report_mode is ReportMode.AI_SUMMARY:
+            ai_path = _required_path(runtime, "ai_config_path", base_dir)
+            temp_diff_dir = _required_path(runtime, "temp_diff_dir", base_dir)
+            env_file_path = _optional_path(runtime, "env_file_path", base_dir)
 
         release_marker = None
         if release_marker_path is not None:
@@ -63,7 +71,8 @@ class ConfigurationService:
             )
         contributors = _contributor_policy(self._json_reader.read_object(user_path))
         modules = _module_policy(self._json_reader.read_object(module_path))
-        ai = _ai_settings(self._json_reader.read_object(ai_path))
+        if ai_path is not None:
+            ai = _ai_settings(self._json_reader.read_object(ai_path))
 
         return WorkflowConfiguration(
             repository_path=repository_path,
@@ -79,6 +88,7 @@ class ConfigurationService:
             refresh_remote=refresh_remote,
             refresh_refspecs=refresh_refspecs,
             env_file_path=env_file_path,
+            report_mode=report_mode,
         )
 
 
@@ -221,6 +231,18 @@ def _repository_update_mode(data: Mapping[str, Any]) -> RepositoryUpdateMode:
         return RepositoryUpdateMode(value)
     except ValueError as exc:
         raise ConfigurationError(f"Unknown repository_update_mode: {value}") from exc
+
+
+def _report_mode(data: Mapping[str, Any]) -> ReportMode:
+    value = data.get("report_mode", ReportMode.AI_SUMMARY.value)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(
+            "Runtime configuration report_mode must be a non-empty string."
+        )
+    try:
+        return ReportMode(value)
+    except ValueError as exc:
+        raise ConfigurationError(f"Unknown report_mode: {value}") from exc
 
 
 def _refresh_configuration(

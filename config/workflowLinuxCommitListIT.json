@@ -1,12 +1,9 @@
 {
-  "report_mode": "ai_summary",
+  "report_mode": "commit_list",
   "repository_path": "../../linux",
   "head_ref": "b95f03f04d475aa6719d15a636ddf32222d55657",
   "user_config_path": "userIT.json",
   "module_config_path": "moduleIT.json",
   "release_marker_config_path": "releaseMarkerIT.json",
-  "ai_config_path": "aiIT.json",
-  "temp_diff_dir": "../tmp/linux-integration/diffs",
-  "output_path": "../output/linux-integration/release_notes.pdf",
-  "env_file_path": "../.env.local"
+  "output_path": "../output/linux-integration/commit_report.pdf"
 }

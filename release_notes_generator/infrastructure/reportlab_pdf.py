@@ -18,7 +18,11 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Flowable, Paragraph, SimpleDocTemplate, Spacer
 
-from release_notes_generator.domain.release_document import ReleaseDocument
+from release_notes_generator.domain.release_document import (
+    ReleaseDocument,
+    ReleaseModuleCommitList,
+    ReleaseModuleSummary,
+)
 from release_notes_generator.services.errors import PDFGenerationError
 
 
@@ -26,6 +30,7 @@ _FONT_REGULAR = "ReleaseNotesVera"
 _FONT_BOLD = "ReleaseNotesVeraBold"
 _FONT_ITALIC = "ReleaseNotesVeraItalic"
 _FONT_BOLD_ITALIC = "ReleaseNotesVeraBoldItalic"
+_FONT_MONO = "Courier"
 
 
 class ReportLabPDFExporter:
@@ -102,7 +107,14 @@ def build_pdf_story(document: ReleaseDocument) -> List[Flowable]:
             story.append(
                 Paragraph(html.escape(module_context), styles["module_context"])
             )
-            story.extend(_summary_flowables(module.summary, styles))
+            if isinstance(module, ReleaseModuleSummary):
+                story.extend(_summary_flowables(module.summary, styles))
+            elif isinstance(module, ReleaseModuleCommitList):
+                story.extend(_commit_flowables(module, styles))
+            else:
+                raise TypeError(
+                    f"Unsupported release module content: {type(module).__name__}"
+                )
             story.append(Spacer(1, 3 * mm))
         story.append(Spacer(1, 3 * mm))
     return story
@@ -170,6 +182,21 @@ def _summary_flowables(
     return flowables
 
 
+def _commit_flowables(
+    module: ReleaseModuleCommitList,
+    styles: dict[str, ParagraphStyle],
+) -> List[Flowable]:
+    return [
+        Paragraph(
+            f'{html.escape(entry.subject)} — '
+            f'<font name="{_FONT_MONO}">{html.escape(entry.commit_hash)}</font>',
+            styles["commit"],
+            bulletText="•",
+        )
+        for entry in module.commits
+    ]
+
+
 def _register_fonts() -> None:
     if _FONT_REGULAR in pdfmetrics.getRegisteredFontNames():
         return
@@ -233,6 +260,16 @@ def _document_styles() -> dict[str, ParagraphStyle]:
         ),
         "bullet": ParagraphStyle(
             "ReleaseBullet",
+            parent=sample["BodyText"],
+            fontName=_FONT_REGULAR,
+            leftIndent=12,
+            firstLineIndent=0,
+            bulletIndent=0,
+            leading=14,
+            spaceAfter=4,
+        ),
+        "commit": ParagraphStyle(
+            "ReleaseCommit",
             parent=sample["BodyText"],
             fontName=_FONT_REGULAR,
             leftIndent=12,

@@ -8,7 +8,9 @@ from unittest.mock import patch
 from reportlab.platypus import Paragraph
 
 from release_notes_generator.domain.release_document import (
+    ReleaseCommitEntry,
     ReleaseDocument,
+    ReleaseModuleCommitList,
     ReleaseModuleSummary,
     ReleaseSection,
 )
@@ -20,6 +22,62 @@ from release_notes_generator.services.errors import PDFGenerationError
 
 
 class PDFStoryTests(unittest.TestCase):
+    def test_story_renders_exact_escaped_commit_bullet_with_monospaced_full_id(self) -> None:
+        commit_hash = "0123456789abcdef" * 4
+        subject = "Pix: protect <unsafe> & café ação"
+        document = ReleaseDocument(
+            title="Release Commit Report",
+            repository_name="payments <core> & services",
+            qualifying_change_count=1,
+            change_start_date=date(2026, 1, 3),
+            change_end_date=date(2026, 1, 3),
+            sections=(
+                ReleaseSection(
+                    title="Payments & Transfers",
+                    modules=(
+                        ReleaseModuleCommitList(
+                            "Pix",
+                            (ReleaseCommitEntry(subject, commit_hash),),
+                            qualifying_change_count=1,
+                            change_start_date=date(2026, 1, 3),
+                            change_end_date=date(2026, 1, 3),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        story = build_pdf_story(document)
+
+        paragraphs = [flowable for flowable in story if isinstance(flowable, Paragraph)]
+        plain_text = [paragraph.getPlainText() for paragraph in paragraphs]
+        commit_paragraph = next(
+            paragraph
+            for paragraph in paragraphs
+            if getattr(paragraph, "bulletText", None) == "•"
+        )
+        self.assertEqual(plain_text[0], "Release Commit Report")
+        self.assertIn("Repository: payments <core> & services", plain_text)
+        self.assertIn("Qualifying changes: 1", plain_text)
+        self.assertIn("Change dates (UTC): 2026-01-03", plain_text)
+        self.assertIn("ISO weeks: 2026-W01", plain_text)
+        self.assertIn("Payments & Transfers", plain_text)
+        self.assertIn("Pix", plain_text)
+        self.assertIn("1 qualifying change · 2026-01-03 (UTC)", plain_text)
+        self.assertEqual(
+            commit_paragraph.getPlainText(), f"{subject} — {commit_hash}"
+        )
+        self.assertIn("Pix: protect &lt;unsafe&gt; &amp; café ação", commit_paragraph.text)
+        hash_fragments = [
+            fragment
+            for fragment in commit_paragraph.frags
+            if getattr(fragment, "text", "") == commit_hash
+        ]
+        self.assertEqual(len(hash_fragments), 1)
+        self.assertEqual(hash_fragments[0].fontName, "Courier")
+        _, wrapped_height = commit_paragraph.wrap(120, 1000)
+        self.assertGreater(wrapped_height, commit_paragraph.style.leading)
+
     def test_story_maps_context_structure_bullets_and_escaped_text(self) -> None:
         document = ReleaseDocument(
             title="Release <Notes>",
@@ -157,6 +215,15 @@ class PDFExportTests(unittest.TestCase):
         self.assertEqual(existing_content, b"existing-pdf")
         self.assertEqual(remaining_files, (output_path,))
 
+    def test_export_renders_commit_list_with_full_sha256_style_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "commit-list.pdf"
+
+            result = export_release_pdf(_commit_list_document(), output_path)
+
+            self.assertEqual(result, output_path)
+            self.assertEqual(output_path.read_bytes()[:5], b"%PDF-")
+
 
 def _document() -> ReleaseDocument:
     return ReleaseDocument(
@@ -172,6 +239,34 @@ def _document() -> ReleaseDocument:
                     ReleaseModuleSummary(
                         "Payments",
                         "- Added café support",
+                        qualifying_change_count=1,
+                        change_start_date=date(2026, 1, 3),
+                        change_end_date=date(2026, 1, 3),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _commit_list_document() -> ReleaseDocument:
+    return ReleaseDocument(
+        title="Release Commit Report",
+        repository_name="payments",
+        qualifying_change_count=1,
+        change_start_date=date(2026, 1, 3),
+        change_end_date=date(2026, 1, 3),
+        sections=(
+            ReleaseSection(
+                title="Payments",
+                modules=(
+                    ReleaseModuleCommitList(
+                        "Pix",
+                        (
+                            ReleaseCommitEntry(
+                                "Pix: add café support", "abcdef0123456789" * 4
+                            ),
+                        ),
                         qualifying_change_count=1,
                         change_start_date=date(2026, 1, 3),
                         change_end_date=date(2026, 1, 3),
