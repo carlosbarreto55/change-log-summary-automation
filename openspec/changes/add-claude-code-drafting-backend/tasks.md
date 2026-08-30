@@ -34,7 +34,7 @@
 - [x] 4.4 Add failing context tests covering multiple modules and reduction levels, distinct process identities per request, exact request order, carried Claude provenance, and absence of cross-module payloads
 - [x] 4.5 Implement the minimal backend factory, summarization outcome, and workflow changes needed to select the configured client and carry provenance without provider-specific introspection
 - [x] 4.6 Preserve concise CLI handling for missing Claude, authentication, capacity, timeout, process, and output errors and prove that no final PDF replaces an existing destination after such failures
-- [ ] 4.7 Run the complete unit and context suites and resolve every regression before repository-facing integration work
+- [x] 4.7 Run the complete unit and context suites and resolve every regression before repository-facing integration work
 
 ## 5. Exercise the Real Subprocess Boundary and Linux Workflow
 
