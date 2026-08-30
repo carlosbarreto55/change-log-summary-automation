@@ -17,7 +17,7 @@ For one configured run, the tool:
 7. Keeps only commits whose raw Git author email exactly matches the contributor allowlist.
 8. Assigns each remaining commit to the first module whose case-sensitive prefix matches its subject.
 9. Generates one temporary Git diff file per non-empty module from the frozen commit SHAs.
-10. Splits oversized module diffs into bounded, ordered AI requests.
+10. Splits oversized module diffs into bounded, ordered AI requests for the selected backend.
 11. Reduces chunk summaries within the same module until one module summary remains.
 12. Composes configured sections and modules in JSON order with repository, change-count, and UTC date-range context.
 13. Atomically writes one Unicode-capable PDF to the configured local path.
@@ -30,7 +30,11 @@ Unauthorized authors and unmapped prefixes are discarded before diff generation,
 - Python 3.9 or newer.
 - Git available on the host machine.
 - A local Git worktree containing the configured boundary commits.
-- An OpenAI-compatible API key when qualifying changes require summarization.
+- For the `openai_compatible` backend, an API key in the configured environment
+  variable when qualifying changes require summarization.
+- For the `claude_code` backend, Claude Code 2.1.251 or newer available as the
+  fixed `claude` executable on `PATH` and authenticated by the operator. Claude
+  is not required when no qualifying changes exist or another backend is used.
 
 An attached branch with a resolvable upstream is required only for the explicitly
 selected `legacy_in_place_sync` mode.
@@ -49,6 +53,19 @@ Run the CLI with a runtime JSON path:
 ```bash
 .venv/bin/change-log-summary --config path/to/workflow.json
 ```
+
+For Claude Code drafting, first verify the operator-owned installation and
+login independently, then run the same command:
+
+```bash
+claude --version
+.venv/bin/change-log-summary --config path/to/claude-workflow.json
+```
+
+The project does not log in to Claude Code, inspect its credential store,
+report the active account or authentication method, or mint, refresh, validate,
+or persist API keys or OAuth tokens. Claude Code chooses credentials according
+to its own precedence and operator configuration.
 
 A successful run returns status `0`. Expected configuration, Git, diff, AI, and PDF failures print a concise message to standard error and return a nonzero status without an expected-error Python traceback.
 
@@ -158,8 +175,12 @@ frozen SHAs and derived commit SHAs, never ambient `HEAD`.
 
 ### AI settings
 
+OpenAI-compatible configuration remains the default when `backend` is omitted.
+New configuration should identify it explicitly:
+
 ```json
 {
+  "backend": "openai_compatible",
   "api_url": "https://provider.example/v1/chat/completions",
   "model": "summary-model",
   "api_key_env_var": "RELEASE_NOTES_AI_API_KEY",
@@ -168,9 +189,41 @@ frozen SHAs and derived commit SHAs, never ambient `HEAD`.
 }
 ```
 
+Claude Code configuration is keyless and contains no endpoint or credential
+location:
+
+```json
+{
+  "backend": "claude_code",
+  "model": "sonnet",
+  "prompt": "Summarize the provided module-specific Git diff for release notes.",
+  "max_diff_characters_per_request": 120000
+}
+```
+
 `max_diff_characters_per_request` must be a positive integer. Diff splitting preserves all content, prefers commit boundaries, and falls back to line boundaries for one oversized commit. Chunk and reduction requests remain ordered and module-specific; content from separate modules is never mixed.
 
-The JSON stores only the name of the API-key environment variable. The secret itself can be provided through the process environment or the ignored local env file.
+For `openai_compatible`, the JSON stores only the name of the API-key
+environment variable. The secret itself can be provided through the process
+environment or the ignored local env file. Claude Code configuration rejects
+`api_url` and `api_key_env_var`; the child process inherits the operator's
+environment so Claude Code can apply its supported authentication rules without
+this project reading credential data.
+
+Each Claude request runs as a fresh, non-persistent `claude -p` process in an
+empty temporary directory. Source-bearing module diffs and reduction inputs are
+written only to standard input. The invocation uses JSON-Schema output, safe
+mode, disabled slash commands, an empty built-in-tool set, strict empty MCP
+configuration, and disabled session persistence. The recorded compatibility
+floor is Claude Code 2.1.251; older or unrecognized versions fail before source
+is sent.
+
+Missing executables, expired login, usage or capacity limits, timeouts,
+nonzero exits, and malformed structured results are expected workflow failures.
+They produce a concise sanitized error, delete temporary diff files, and do not
+replace an existing PDF. The workflow does not retry with another backend or
+bypass a usage limit. Resolve the installation, login, or capacity issue with
+Claude Code itself and rerun the same workflow command.
 
 ## Repository State and Update Modes
 
@@ -290,7 +343,24 @@ Run the optional networked AI integration test:
 RUN_LIVE_AI_IT=1 .venv/bin/python -m unittest -v tests.integration.test_ai_summarization_live
 ```
 
-The live test requires the configured API key. It records sanitized request payloads under `tests/assets/`, redacts authorization headers, and preserves the most recent live-run assets for inspection. Normal non-live workflow tests use temporary directories and leave no generated repository assets behind.
+Run the optional live Claude Code Linux integration only after verifying the
+operator login:
+
+```bash
+RUN_LIVE_CLAUDE_CODE_IT=1 \
+CLAUDE_CODE_OPERATOR_LOGGED_IN=1 \
+.venv/bin/python -m unittest -v tests.integration.test_claude_code_live
+```
+
+The OpenAI-compatible live test requires the configured API key. It records
+sanitized request payloads under `tests/assets/`, redacts authorization headers,
+and preserves the most recent live-run assets for inspection. Normal non-live
+workflow tests use temporary directories and leave no generated repository
+assets behind.
+
+The live Claude Code test has separate opt-in and login-attestation gates. It
+uses one accepted Linux commit per configured module and stores no prompts,
+diffs, summaries, credentials, account identity, or raw Claude process output.
 
 ## Security Notes
 
@@ -298,7 +368,14 @@ The live test requires the configured API key. It records sanitized request payl
 - Treat temporary diffs and live-test assets as sensitive source artifacts.
 - Review contributor emails and prefixes before running against a proprietary repository.
 - Use a conservative request character limit appropriate for the selected model.
-- Remember that qualifying diff content is sent to the configured external AI endpoint.
+- A keyless Claude Code configuration does not mean local inference. Qualifying,
+  approved source content is still transmitted by Claude Code to Anthropic or
+  the operator's configured remote provider under that account and provider's
+  policies.
+- Never infer the active Claude authentication method from inherited
+  environment values; verify the intended login directly with Claude Code.
+- Remember that qualifying diff content is sent to the selected backend's
+  configured external provider.
 
 ## Project Structure
 
@@ -307,6 +384,7 @@ config/                    Default and Linux integration JSON
 release_notes_generator/
   commits.py               Synchronization, history extraction, filtering, grouping
   configuration.py         JSON loading and validation
+  claude_code.py           Restricted, keyless Claude Code process adapter
   diffs.py                 Per-module temporary diff generation
   summarization.py         Bounded AI chunking and hierarchical reduction
   composition.py           Ordered structured release document
