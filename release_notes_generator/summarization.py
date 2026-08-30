@@ -6,17 +6,49 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional, Protocol
 
-from release_notes_generator.configuration import AIConfig
+from release_notes_generator.configuration import (
+    AIConfig,
+    ClaudeCodeAIConfig,
+    OpenAICompatibleAIConfig,
+)
 
 
 DEFAULT_USER_AGENT = "change-log-summary/0.1"
 
+REDUCTION_SYSTEM_PROMPT = (
+    "Combine the partial release-note summaries into one concise summary. "
+    "Preserve user-visible facts and return Markdown bullets."
+)
+
 
 class AISummarizationError(RuntimeError):
     """Raised when AI summarization cannot be completed."""
+
+
+@dataclass(frozen=True)
+class SummarizationProvenance:
+    """Secret-free record of which backend produced completed summaries."""
+
+    backend: str
+    model: str
+    claude_code_version: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SummarizationOutcome:
+    """Immutable completed summarization result with execution provenance."""
+
+    module_summaries: tuple[tuple[str, str], ...]
+    provenance: Optional[SummarizationProvenance]
+
+    @property
+    def summaries(self) -> dict[str, str]:
+        """Return the ordered module summaries as a mapping."""
+        return dict(self.module_summaries)
 
 
 class SummaryClient(Protocol):
@@ -49,7 +81,7 @@ class OpenAIChatClient:
     @classmethod
     def from_config(
         cls,
-        config: AIConfig,
+        config: OpenAICompatibleAIConfig,
         environ: Optional[Mapping[str, str]] = None,
         env_file: Optional[Path] = None,
     ) -> "OpenAIChatClient":
@@ -77,14 +109,15 @@ class OpenAIChatClient:
 
     def reduce(self, module_name: str, partial_summaries: str) -> str:
         return self._complete(
-            system_prompt=(
-                "Combine the partial release-note summaries into one concise summary. "
-                "Preserve user-visible facts and return Markdown bullets."
-            ),
+            system_prompt=REDUCTION_SYSTEM_PROMPT,
             user_content=(
                 f"Module: {module_name}\n\nPartial summaries:\n{partial_summaries}"
             ),
         )
+
+    def execution_provenance(self) -> SummarizationProvenance:
+        """Return the secret-free backend identity used for completed requests."""
+        return SummarizationProvenance(backend="openai_compatible", model=self._model)
 
     def _complete(self, system_prompt: str, user_content: str) -> str:
         payload = {
@@ -120,6 +153,50 @@ class OpenAIChatClient:
         if not isinstance(summary, str) or not summary.strip():
             raise AISummarizationError("AI summarization response was empty.")
         return summary.strip()
+
+
+def create_summary_client(
+    ai_config: AIConfig,
+    environ: Optional[Mapping[str, str]] = None,
+    env_file: Optional[Path] = None,
+) -> SummaryClient:
+    """Construct only the summary client selected by the backend configuration."""
+    if isinstance(ai_config, ClaudeCodeAIConfig):
+        from release_notes_generator.claude_code import ClaudeCodeClient
+
+        return ClaudeCodeClient(ai_config)
+    if isinstance(ai_config, OpenAICompatibleAIConfig):
+        return OpenAIChatClient.from_config(ai_config, environ=environ, env_file=env_file)
+    raise AISummarizationError(
+        f"Unsupported AI backend configuration: {type(ai_config).__name__}"
+    )
+
+
+def summarize_diff_files_with_provenance(
+    diff_files: Mapping[str, Path],
+    client: SummaryClient,
+    max_characters_per_request: int,
+) -> SummarizationOutcome:
+    """Summarize bounded module diffs and return the completed immutable outcome."""
+    summaries = summarize_diff_files(diff_files, client, max_characters_per_request)
+    return SummarizationOutcome(
+        module_summaries=tuple(summaries.items()),
+        provenance=_client_execution_provenance(client),
+    )
+
+
+def _client_execution_provenance(
+    client: SummaryClient,
+) -> Optional[SummarizationProvenance]:
+    provenance_source = getattr(client, "execution_provenance", None)
+    if not callable(provenance_source):
+        return None
+    provenance = provenance_source()
+    if not isinstance(provenance, SummarizationProvenance):
+        raise AISummarizationError(
+            "Summary client returned unusable execution provenance."
+        )
+    return provenance
 
 
 def summarize_diff_files(

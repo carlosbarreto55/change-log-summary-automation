@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +122,142 @@ class RuntimeFlowTests(unittest.TestCase):
                     summary_client=RecordingSummaryClient()
                 ).run(runtime_path)
             validate_paths.assert_not_called()
+
+    def test_invalid_backend_configuration_fails_before_every_downstream_stage(self) -> None:
+        invalid_ai_configurations = (
+            (
+                "unsupported-backend",
+                {
+                    "backend": "anthropic",
+                    "api_url": "https://api.example.test",
+                    "model": "m",
+                    "api_key_env_var": "KEY",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                },
+            ),
+            (
+                "claude-code-with-full-api-fields",
+                {
+                    "backend": "claude_code",
+                    "api_url": "https://api.example.test",
+                    "model": "m",
+                    "api_key_env_var": "KEY",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                },
+            ),
+            (
+                "claude-code-missing-model",
+                {
+                    "backend": "claude_code",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                },
+            ),
+            (
+                "claude-code-missing-prompt",
+                {
+                    "backend": "claude_code",
+                    "model": "m",
+                    "max_diff_characters_per_request": 100,
+                },
+            ),
+            (
+                "claude-code-invalid-limit",
+                {
+                    "backend": "claude_code",
+                    "model": "m",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 0,
+                },
+            ),
+            (
+                "claude-code-inline-secret",
+                {
+                    "backend": "claude_code",
+                    "model": "m",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                    "api_key": "inline-secret",
+                },
+            ),
+            (
+                "claude-code-api-field",
+                {
+                    "backend": "claude_code",
+                    "model": "m",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                    "api_url": "https://api.example.test",
+                },
+            ),
+            (
+                "openai-missing-api-url",
+                {
+                    "backend": "openai_compatible",
+                    "model": "m",
+                    "api_key_env_var": "KEY",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                },
+            ),
+            (
+                "legacy-missing-api-key-env-var",
+                {
+                    "api_url": "https://api.example.test",
+                    "model": "m",
+                    "prompt": "p",
+                    "max_diff_characters_per_request": 100,
+                },
+            ),
+        )
+        for name, ai_data in invalid_ai_configurations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                repository, _, _ = create_repository(root)
+                runtime_path = write_runtime_configuration(root, repository)
+                (root / "config" / "ai.json").write_text(
+                    json.dumps(ai_data), encoding="utf-8"
+                )
+                output_path = root / "analysis" / "release.pdf"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(b"existing pdf content")
+
+                with (
+                    patch(
+                        "release_notes_generator.workflow.validate_analysis_paths"
+                    ) as validate_paths,
+                    patch(
+                        "release_notes_generator.workflow.inspect_repository"
+                    ) as inspect,
+                    patch(
+                        "release_notes_generator.workflow.update_repository"
+                    ) as update,
+                    patch(
+                        "release_notes_generator.workflow.generate_diff_files"
+                    ) as generate_diffs,
+                    patch(
+                        "release_notes_generator.workflow.summarize_diff_files_with_provenance"
+                    ) as summarize,
+                    patch(
+                        "release_notes_generator.workflow.export_release_pdf"
+                    ) as export_pdf,
+                    patch("subprocess.Popen") as popen,
+                    patch("urllib.request.urlopen") as urlopen,
+                    self.assertRaises(ConfigurationError),
+                ):
+                    ReleaseNotesWorkflow().run(runtime_path)
+
+                validate_paths.assert_not_called()
+                inspect.assert_not_called()
+                update.assert_not_called()
+                generate_diffs.assert_not_called()
+                summarize.assert_not_called()
+                export_pdf.assert_not_called()
+                popen.assert_not_called()
+                urlopen.assert_not_called()
+                self.assertEqual(output_path.read_bytes(), b"existing pdf content")
 
     def test_all_referenced_configuration_is_validated_before_git(self) -> None:
         for config_name in ("user.json", "module.json", "ai.json"):

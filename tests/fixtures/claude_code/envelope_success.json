@@ -1,0 +1,12 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "num_turns": 2,
+  "result": "{\"summary\":\"Sanitized example summary.\"}",
+  "structured_output": {
+    "summary": "Sanitized example summary."
+  }
+}
