@@ -52,6 +52,7 @@ Run the CLI with a runtime JSON path:
 
 ```bash
 .venv/bin/change-log-summary --config path/to/workflow.json
+python -m release_notes_generator --config path/to/workflow.json
 ```
 
 For Claude Code drafting, first verify the operator-owned installation and
@@ -382,19 +383,32 @@ diffs, summaries, credentials, account identity, or raw Claude process output.
 ```text
 config/                    Default and Linux integration JSON
 release_notes_generator/
-  commits.py               Synchronization, history extraction, filtering, grouping
-  configuration.py         JSON loading and validation
-  claude_code.py           Restricted, keyless Claude Code process adapter
-  diffs.py                 Per-module temporary diff generation
-  summarization.py         Bounded AI chunking and hierarchical reduction
-  composition.py           Ordered structured release document
-  pdf_export.py            Atomic ReportLab PDF rendering
-  workflow.py              End-to-end orchestration
+  domain/                   Immutable values, enums, and pure value behavior
+  services/                 Use case, workflow services, and narrow Protocol ports
+  infrastructure/           JSON, Git, filesystem, AI, env-file, and PDF adapters
+  presentation/             CLI parsing, error handling, and manual composition
+  __main__.py               `python -m release_notes_generator` entry point
 tests/
-  unit/                    Class/module tests
+  unit/
+    domain/                 Dependency-free value behavior
+    services/               Workflow and transformation behavior with injected fakes
+    infrastructure/         Adapter behavior and external-error mapping
+    presentation/           CLI and AST-enforced architecture boundaries
   context/                 Cross-module workflow tests
   integration/             Linux fixture and optional live AI tests
 ```
+
+The dependency direction is intentionally one-way. `domain` imports only the
+Python standard library. `services` imports domain values and its own minimal
+ports, never concrete adapters. `infrastructure` implements those ports and
+returns domain values. `presentation` is the composition root: it manually
+wires infrastructure into services and owns CLI exit codes and error text.
+Package initializers perform no imports or runtime setup.
+
+`ReleaseNotesService.generate(config_path)` is the application use-case entry
+point. It accepts the runtime configuration path explicitly, validates every
+referenced JSON file before Git or filesystem side effects, and returns the
+generated PDF path. Provider clients remain lazy when no commits qualify.
 
 ## Contributing
 

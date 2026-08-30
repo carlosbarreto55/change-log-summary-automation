@@ -9,15 +9,15 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
-from release_notes_generator.claude_code import ClaudeCodeClient, ProcessResult
-from release_notes_generator.cli import main
-from release_notes_generator.configuration import ClaudeCodeAIConfig
-from release_notes_generator.summarization import (
-    AISummarizationError,
-    SummarizationProvenance,
-    summarize_diff_files_with_provenance,
-)
-from release_notes_generator.workflow import ReleaseNotesWorkflow
+from release_notes_generator.domain.analysis import DiffArtifact
+from release_notes_generator.domain.configuration import ClaudeCodeAISettings
+from release_notes_generator.domain.summarization import SummarizationProvenance
+from release_notes_generator.infrastructure.artifacts import LocalArtifactStore
+from release_notes_generator.infrastructure.claude_code import ClaudeCodeClient, ProcessResult
+from release_notes_generator.presentation.cli import main
+from release_notes_generator.services.errors import AISummarizationError
+from release_notes_generator.services.summarization import SummarizationService
+from tests.context.application import ReleaseNotesRunner
 from tests.context.workflow_fixture import (
     create_repository,
     run_git,
@@ -26,6 +26,25 @@ from tests.context.workflow_fixture import (
 
 
 VERSION_RESULT = ProcessResult(returncode=0, stdout="2.1.251 (Claude Code)\n", stderr="")
+
+
+class UnusedFactory:
+    def create(self, settings, env_file):
+        raise AssertionError("injected client should bypass backend creation")
+
+
+def summarize_diff_files_with_provenance(
+    diff_files, client, max_characters_per_request
+):
+    return SummarizationService(
+        LocalArtifactStore(), UnusedFactory(), client
+    ).summarize(
+        tuple(DiffArtifact(name, Path(path)) for name, path in diff_files.items()),
+        ClaudeCodeAISettings(
+            "claude-model", "Summarize release-note diffs.", max_characters_per_request
+        ),
+        None,
+    )
 
 
 def _envelope(summary: str) -> ProcessResult:
@@ -120,22 +139,18 @@ class ClaudeCodeBackendSelectionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "release_notes_generator.claude_code.run_claude_process",
+                    "release_notes_generator.infrastructure.claude_code.run_claude_process",
                     fake_runner,
                 ),
                 patch("urllib.request.urlopen") as urlopen,
-                patch(
-                    "release_notes_generator.summarization.OpenAIChatClient.from_config"
-                ) as from_config,
             ):
-                result = ReleaseNotesWorkflow().run(runtime_path)
+                result = ReleaseNotesRunner().run(runtime_path)
 
             self.assertEqual(result, 0)
             self.assertEqual(
                 (root / "analysis" / "release.pdf").read_bytes()[:5], b"%PDF-"
             )
             urlopen.assert_not_called()
-            from_config.assert_not_called()
             self.assertEqual(len(fake_runner.version_invocations), 1)
             self.assertGreaterEqual(len(fake_runner.request_invocations), 1)
             self.assertIn(
@@ -152,7 +167,7 @@ class ClaudeCodeBackendSelectionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "release_notes_generator.claude_code.run_claude_process",
+                    "release_notes_generator.infrastructure.claude_code.run_claude_process",
                     fake_runner,
                 ),
                 patch.dict(
@@ -160,7 +175,7 @@ class ClaudeCodeBackendSelectionTests(unittest.TestCase):
                     {"CHANGE_LOG_SUMMARY_AI_API_KEY": "test-api-key"},
                 ),
                 patch(
-                    "release_notes_generator.summarization.urllib.request.urlopen"
+                    "release_notes_generator.infrastructure.openai.urllib.request.urlopen"
                 ) as urlopen,
             ):
                 urlopen.return_value.__enter__.return_value.read.return_value = (
@@ -168,7 +183,7 @@ class ClaudeCodeBackendSelectionTests(unittest.TestCase):
                         {"choices": [{"message": {"content": "- Pix summary"}}]}
                     ).encode("utf-8")
                 )
-                result = ReleaseNotesWorkflow().run(runtime_path)
+                result = ReleaseNotesRunner().run(runtime_path)
 
             self.assertEqual(result, 0)
             self.assertEqual(
@@ -191,12 +206,12 @@ class ClaudeCodeBackendSelectionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "release_notes_generator.claude_code.run_claude_process",
+                    "release_notes_generator.infrastructure.claude_code.run_claude_process",
                     fake_runner,
                 ),
                 patch("urllib.request.urlopen") as urlopen,
             ):
-                result = ReleaseNotesWorkflow().run(runtime_path)
+                result = ReleaseNotesRunner().run(runtime_path)
 
             self.assertEqual(result, 0)
             self.assertEqual(
@@ -225,9 +240,9 @@ class ClaudeCodeBackendSelectionTests(unittest.TestCase):
             injected = InjectedClient()
 
             with patch(
-                "release_notes_generator.workflow.create_summary_client"
+                "release_notes_generator.infrastructure.openai.SummaryClientFactoryAdapter.create"
             ) as factory:
-                result = ReleaseNotesWorkflow(summary_client=injected).run(runtime_path)
+                result = ReleaseNotesRunner(summary_client=injected).run(runtime_path)
 
             self.assertEqual(result, 0)
             factory.assert_not_called()
@@ -271,10 +286,10 @@ class ClaudeCodeIsolationFlowTests(unittest.TestCase):
             fake_runner = FakeClaudeProcessRunner()
 
             with patch(
-                "release_notes_generator.claude_code.run_claude_process",
+                "release_notes_generator.infrastructure.claude_code.run_claude_process",
                 fake_runner,
             ):
-                result = ReleaseNotesWorkflow().run(runtime_path)
+                result = ReleaseNotesRunner().run(runtime_path)
 
             self.assertEqual(result, 0)
 
@@ -349,7 +364,7 @@ class ClaudeCodeIsolationFlowTests(unittest.TestCase):
             loyalty_path.write_text("loyalty diff", encoding="utf-8")
             fake_runner = FakeClaudeProcessRunner()
             client = ClaudeCodeClient(
-                ClaudeCodeAIConfig(
+                ClaudeCodeAISettings(
                     model="claude-model",
                     prompt="Summarize release-note diffs.",
                     max_diff_characters_per_request=1000,
@@ -394,13 +409,13 @@ class ClaudeCodeFailureGatingTests(unittest.TestCase):
 
         with (
             patch(
-                "release_notes_generator.claude_code.run_claude_process",
+                "release_notes_generator.infrastructure.claude_code.run_claude_process",
                 fake_runner,
             ),
-            patch("release_notes_generator.workflow.export_release_pdf") as export_pdf,
+            patch("release_notes_generator.infrastructure.reportlab_pdf.ReportLabPDFExporter.export") as export_pdf,
             self.assertRaises(AISummarizationError) as context,
         ):
-            ReleaseNotesWorkflow().run(runtime_path)
+            ReleaseNotesRunner().run(runtime_path)
 
         export_pdf.assert_not_called()
         return output_path, root / "analysis" / "diffs", context.exception
@@ -445,7 +460,7 @@ class ClaudeCodeFailureGatingTests(unittest.TestCase):
 
             with (
                 patch(
-                    "release_notes_generator.claude_code.run_claude_process",
+                    "release_notes_generator.infrastructure.claude_code.run_claude_process",
                     fake_runner,
                 ),
                 redirect_stderr(stderr),

@@ -12,7 +12,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from release_notes_generator.paths import PROJECT_ROOT
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class WheelBackendConfigurationTests(unittest.TestCase):
@@ -91,6 +91,32 @@ class WheelBackendConfigurationTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            user_path = root / "user.json"
+            module_path = root / "module.json"
+            user_path.write_text('{"approved_author_emails": []}', encoding="utf-8")
+            module_path.write_text('{"modules": []}', encoding="utf-8")
+
+            def write_runtime(name: str, ai_path: Path) -> Path:
+                path = root / f"workflow-{name}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "repository_path": str(root / "repository"),
+                            "head_ref": "head",
+                            "base_ref": "base",
+                            "user_config_path": str(user_path),
+                            "module_config_path": str(module_path),
+                            "ai_config_path": str(ai_path),
+                            "temp_diff_dir": str(root / f"diffs-{name}"),
+                            "output_path": str(root / f"release-{name}.pdf"),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return path
+
+            openai_runtime_path = write_runtime("openai", openai_path)
+            claude_runtime_path = write_runtime("claude", claude_path)
 
             smoke_script = textwrap.dedent(
                 """
@@ -101,15 +127,15 @@ class WheelBackendConfigurationTests(unittest.TestCase):
                 installed = Path(os.environ["INSTALLED_PACKAGE_ROOT"]).resolve()
                 sys.path.insert(0, str(installed))
 
-                from release_notes_generator.claude_code import ClaudeCodeClient
-                from release_notes_generator.configuration import (
-                    AIBackend,
-                    load_ai_config,
-                )
-                from release_notes_generator.summarization import AISummarizationError
+                from release_notes_generator.domain.configuration import AIBackend
+                from release_notes_generator.infrastructure.claude_code import ClaudeCodeClient
+                from release_notes_generator.infrastructure.json_reader import FileJSONReader
+                from release_notes_generator.services.configuration import ConfigurationService
+                from release_notes_generator.services.errors import AISummarizationError
 
-                openai_config = load_ai_config(Path(os.environ["OPENAI_CONFIG_PATH"]))
-                claude_config = load_ai_config(Path(os.environ["CLAUDE_CONFIG_PATH"]))
+                loader = ConfigurationService(FileJSONReader())
+                openai_config = loader.load(Path(os.environ["OPENAI_CONFIG_PATH"])).ai
+                claude_config = loader.load(Path(os.environ["CLAUDE_CONFIG_PATH"])).ai
                 assert openai_config.backend is AIBackend.OPENAI_COMPATIBLE
                 assert claude_config.backend is AIBackend.CLAUDE_CODE
                 assert installed in Path(__import__("release_notes_generator").__file__).parents
@@ -129,8 +155,8 @@ class WheelBackendConfigurationTests(unittest.TestCase):
                 {
                     "PYTHONPATH": str(installed_directory),
                     "INSTALLED_PACKAGE_ROOT": str(installed_directory),
-                    "OPENAI_CONFIG_PATH": str(openai_path),
-                    "CLAUDE_CONFIG_PATH": str(claude_path),
+                    "OPENAI_CONFIG_PATH": str(openai_runtime_path),
+                    "CLAUDE_CONFIG_PATH": str(claude_runtime_path),
                 }
             )
             smoke_result = subprocess.run(

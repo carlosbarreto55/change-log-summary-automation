@@ -10,7 +10,7 @@ requires-python = ">=3.9"
 dependencies = ["reportlab>=5,<6"]
 
 [project.scripts]
-change-log-summary = "release_notes_generator.cli:main"
+change-log-summary = "release_notes_generator.presentation.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["release_notes_generator*"]

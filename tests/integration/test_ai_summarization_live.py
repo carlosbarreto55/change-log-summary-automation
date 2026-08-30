@@ -8,27 +8,22 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from release_notes_generator.commits import (
-    GitCommitExtractor,
-    filter_commits,
-    group_commit_hashes_by_module,
-)
-from release_notes_generator.configuration import (
-    load_ai_config,
-    load_module_config,
-    load_release_marker_config,
-    load_user_config,
-)
-from release_notes_generator.diffs import generate_diff_files
-from release_notes_generator.paths import CONFIG_DIR, LOCAL_ENV_FILE_PATH, PROJECT_ROOT
-from release_notes_generator.summarization import (
-    OpenAIChatClient,
-    load_env_file,
-    summarize_diff_files,
-)
+from release_notes_generator.infrastructure.artifacts import LocalArtifactStore
+from release_notes_generator.infrastructure.environment import EnvironmentFileAdapter
+from release_notes_generator.infrastructure.git import GitAdapter
+from release_notes_generator.infrastructure.json_reader import FileJSONReader
+from release_notes_generator.infrastructure.openai import SummaryClientFactoryAdapter
+from release_notes_generator.services.commit_selection import CommitSelectionService
+from release_notes_generator.services.configuration import ConfigurationService
+from release_notes_generator.services.diff_generation import DiffGenerationService
+from release_notes_generator.services.summarization import SummarizationService
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = PROJECT_ROOT / "config"
+LOCAL_ENV_FILE_PATH = PROJECT_ROOT / ".env.local"
 LINUX_REPOSITORY_PATH = PROJECT_ROOT.parent / "linux"
+WORKFLOW_IT_CONFIG_PATH = CONFIG_DIR / "workflowLinuxIT.json"
 USER_IT_CONFIG_PATH = CONFIG_DIR / "userIT.json"
 MODULE_IT_CONFIG_PATH = CONFIG_DIR / "moduleIT.json"
 RELEASE_MARKER_IT_CONFIG_PATH = CONFIG_DIR / "releaseMarkerIT.json"
@@ -39,7 +34,7 @@ ASSETS_DIR = PROJECT_ROOT / "tests" / "assets"
 class LiveAISummarizationIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.environment = load_env_file(LOCAL_ENV_FILE_PATH)
+        cls.environment = EnvironmentFileAdapter().load(LOCAL_ENV_FILE_PATH)
         cls.environment.update(os.environ)
         if cls.environment.get("RUN_LIVE_AI_IT", "").lower() not in {"1", "true", "yes"}:
             raise unittest.SkipTest("Set RUN_LIVE_AI_IT=1 to run live AI integration tests.")
@@ -61,7 +56,10 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
                 f"Linux integration fixture is not a Git repository: {LINUX_REPOSITORY_PATH}"
             )
 
-        cls.ai_config = load_ai_config(AI_IT_CONFIG_PATH)
+        cls.workflow_config = ConfigurationService(FileJSONReader()).load(
+            WORKFLOW_IT_CONFIG_PATH
+        )
+        cls.ai_config = cls.workflow_config.ai
         if not cls.environment.get(cls.ai_config.api_key_env_var):
             raise unittest.SkipTest(
                 f"Missing AI API key environment variable: {cls.ai_config.api_key_env_var}"
@@ -69,22 +67,32 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
 
     def test_live_ai_summarizes_bounded_separated_linux_diff_payloads(self) -> None:
         _reset_assets_dir()
-        release_marker_config = load_release_marker_config(RELEASE_MARKER_IT_CONFIG_PATH)
-        user_config = load_user_config(USER_IT_CONFIG_PATH)
-        module_config = load_module_config(MODULE_IT_CONFIG_PATH)
-        commits = GitCommitExtractor(LINUX_REPOSITORY_PATH).commits_after_latest_release_marker(
-            release_marker_config.marker
+        configuration = self.workflow_config
+        git = GitAdapter()
+        release_range = git.resolve_release_range(
+            LINUX_REPOSITORY_PATH,
+            configuration.head_ref,
+            base_ref=configuration.base_ref,
+            release_marker=configuration.release_marker,
         )
-        accepted_commits = filter_commits(
-            commits,
-            user_config.approved_author_emails,
-            module_config.module_tags,
+        selection = CommitSelectionService()
+        accepted_commits = selection.select(
+            git.commits_in_range(LINUX_REPOSITORY_PATH, release_range),
+            configuration.contributors,
+            configuration.modules,
         )
-        selected_commits = _first_commit_per_module(accepted_commits, tuple(module_config.module_tags))
+        selected_commits = _first_commit_per_module(
+            accepted_commits, tuple(configuration.modules.module_tags)
+        )
 
-        grouped_hashes = group_commit_hashes_by_module(selected_commits)
-        diff_files = generate_diff_files(LINUX_REPOSITORY_PATH, grouped_hashes, ASSETS_DIR)
-        client = OpenAIChatClient.from_config(self.ai_config, environ=self.environment)
+        grouped_hashes = selection.group(selected_commits)
+        store = LocalArtifactStore()
+        artifacts = DiffGenerationService(git, store).generate(
+            LINUX_REPOSITORY_PATH, grouped_hashes, ASSETS_DIR
+        )
+        client = SummaryClientFactoryAdapter(environ=self.environment).create(
+            self.ai_config, None
+        )
         original_urlopen = urllib.request.urlopen
         request_count = 0
         request_assets_dir = ASSETS_DIR / "ai_requests"
@@ -96,14 +104,12 @@ class LiveAISummarizationIntegrationTests(unittest.TestCase):
             return original_urlopen(request, *args, **kwargs)
 
         with patch(
-            "release_notes_generator.summarization.urllib.request.urlopen",
+            "release_notes_generator.infrastructure.openai.urllib.request.urlopen",
             side_effect=recording_urlopen,
         ):
-            summaries = summarize_diff_files(
-                diff_files,
-                client,
-                self.ai_config.max_diff_characters_per_request,
-            )
+            summaries = SummarizationService(store, SummaryClientFactoryAdapter(), client).summarize(
+                artifacts, self.ai_config, None
+            ).summaries
 
         self.assertEqual(set(summaries), set(grouped_hashes))
         self.assertGreaterEqual(request_count, len(grouped_hashes))

@@ -10,27 +10,24 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from release_notes_generator.claude_code import ClaudeCodeClient
-from release_notes_generator.commits import (
-    GitCommitExtractor,
-    GitHistoryError,
-    filter_commits,
+from release_notes_generator.domain.configuration import (
+    ClaudeCodeAISettings,
+    ContributorPolicy,
+    ModuleDefinition,
+    ModulePolicy,
+    OpenAICompatibleAISettings,
+    WorkflowConfiguration,
 )
-from release_notes_generator.configuration import (
-    RuntimeConfig,
-    load_ai_config,
-    load_module_config,
-    load_release_marker_config,
-    load_runtime_config,
-    load_user_config,
-)
-from release_notes_generator.paths import CONFIG_DIR
-from release_notes_generator.pdf_export import export_release_pdf
-from release_notes_generator.summarization import (
-    SummarizationProvenance,
-    summarize_diff_files_with_provenance,
-)
-from release_notes_generator.workflow import ReleaseNotesWorkflow
+from release_notes_generator.domain.summarization import SummarizationProvenance
+from release_notes_generator.infrastructure.claude_code import ClaudeCodeClient
+from release_notes_generator.infrastructure.git import GitAdapter
+from release_notes_generator.infrastructure.json_reader import FileJSONReader
+from release_notes_generator.infrastructure.reportlab_pdf import ReportLabPDFExporter
+from release_notes_generator.services.commit_selection import CommitSelectionService
+from release_notes_generator.services.configuration import ConfigurationService
+from release_notes_generator.services.errors import GitHistoryError
+from release_notes_generator.services.summarization import SummarizationService
+from tests.context.application import ReleaseNotesRunner
 from tests.claude_code_harness import (
     installed_fake_claude,
     load_fake_claude_records,
@@ -39,6 +36,8 @@ from tests.context.git_state import snapshot_git_state
 from tests.integration.git_fixture_state import snapshot_linux_fixture
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = PROJECT_ROOT / "config"
 WORKFLOW_LINUX_IT_CONFIG_PATH = CONFIG_DIR / "workflowLinuxIT.json"
 EXPECTED_HEAD_SHA = "b95f03f04d475aa6719d15a636ddf32222d55657"
 EXPECTED_MARKER_SHA = "8cd9520d35a6c38db6567e97dd93b1f11f185dc6"
@@ -51,6 +50,103 @@ EXPECTED_MODULE_COUNTS = {
     "ALSA SoC": 65,
     "KSMBD": 72,
 }
+
+
+class RuntimeConfig:
+    """Test view retaining referenced paths while delegating domain values."""
+
+    def __init__(self, path: Path) -> None:
+        self.configuration = ConfigurationService(FileJSONReader()).load(path)
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        base = Path(path).resolve(strict=False).parent
+        self.user_config_path = _resolve_reference(raw["user_config_path"], base)
+        self.module_config_path = _resolve_reference(raw["module_config_path"], base)
+        self.ai_config_path = _resolve_reference(raw["ai_config_path"], base)
+        marker_path = raw.get("release_marker_config_path")
+        self.release_marker_config_path = (
+            _resolve_reference(marker_path, base)
+            if isinstance(marker_path, str)
+            else None
+        )
+
+    def __getattr__(self, name: str):
+        return getattr(self.configuration, name)
+
+
+def _resolve_reference(value: str, base: Path) -> Path:
+    path = Path(value).expanduser()
+    return path.resolve(strict=False) if path.is_absolute() else (base / path).resolve(strict=False)
+
+
+def load_runtime_config(path: Path) -> RuntimeConfig:
+    return RuntimeConfig(path)
+
+
+def load_user_config(path: Path) -> ContributorPolicy:
+    data = FileJSONReader().read_object(path)
+    return ContributorPolicy(tuple(data["approved_author_emails"]))
+
+
+def load_module_config(path: Path) -> ModulePolicy:
+    data = FileJSONReader().read_object(path)
+    return ModulePolicy(
+        tuple(
+            ModuleDefinition(module["name"], tuple(module["tags"]), module["section"])
+            for module in data["modules"]
+        )
+    )
+
+
+def load_release_marker_config(path: Path):
+    data = FileJSONReader().read_object(path)
+    return type("ReleaseMarker", (), {"marker": data["marker"]})()
+
+
+def load_ai_config(path: Path):
+    data = FileJSONReader().read_object(path)
+    common = (
+        data["model"],
+        data["prompt"],
+        data["max_diff_characters_per_request"],
+    )
+    if data.get("backend") == "claude_code":
+        return ClaudeCodeAISettings(*common)
+    return OpenAICompatibleAISettings(
+        data["api_url"], common[0], data["api_key_env_var"], common[1], common[2]
+    )
+
+
+class GitCommitExtractor:
+    def __init__(self, repository_path: Path) -> None:
+        self.repository_path = repository_path
+        self.git = GitAdapter()
+
+    def resolve_release_range(self, head_ref, *, base_ref=None, release_marker=None):
+        return self.git.resolve_release_range(
+            self.repository_path,
+            head_ref,
+            base_ref=base_ref,
+            release_marker=release_marker,
+        )
+
+    def commits_in_range(self, release_range):
+        return self.git.commits_in_range(self.repository_path, release_range)
+
+
+def filter_commits(commits, approved_emails, module_tags):
+    modules = ModulePolicy(
+        tuple(
+            ModuleDefinition(name, tuple(tags), name)
+            for name, tags in module_tags.items()
+        )
+    )
+    return CommitSelectionService().select(
+        commits, ContributorPolicy(tuple(approved_emails)), modules
+    )
+
+
+def export_release_pdf(document, destination):
+    return ReportLabPDFExporter().export(document, destination)
 
 
 class RecordingSummaryClient:
@@ -206,16 +302,17 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
             client = RecordingSummaryClient()
             warnings: list[str] = []
             documents = []
+            original_export = ReportLabPDFExporter.export
 
             def recording_export(document, destination) -> None:
                 documents.append(document)
-                export_release_pdf(document, destination)
+                original_export(ReportLabPDFExporter(), document, destination)
 
             with patch(
-                "release_notes_generator.workflow.export_release_pdf",
+                "release_notes_generator.infrastructure.reportlab_pdf.ReportLabPDFExporter.export",
                 side_effect=recording_export,
             ):
-                result = ReleaseNotesWorkflow(
+                result = ReleaseNotesRunner(
                     summary_client=client,
                     warning_handler=warnings.append,
                 ).run(runtime_path)
@@ -281,16 +378,12 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
             )
             runtime_config = load_runtime_config(runtime_path)
             ai_config = load_ai_config(claude_ai_path)
-            accepted_commits = []
+            accepted_commits = list(_accepted_linux_commits(runtime_config))
             request_trace: list[dict[str, object]] = []
             outcomes = []
             original_summarize = ClaudeCodeClient.summarize
             original_reduce = ClaudeCodeClient.reduce
-
-            def recording_filter(commits, approved_emails, module_tags):
-                result = filter_commits(commits, approved_emails, module_tags)
-                accepted_commits.extend(result)
-                return result
+            original_outcome = SummarizationService.summarize
 
             def recording_summarize(client, module_name, diff_content):
                 request_trace.append(
@@ -304,8 +397,8 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
                 )
                 return original_reduce(client, module_name, partial_summaries)
 
-            def recording_outcome(*args, **kwargs):
-                outcome = summarize_diff_files_with_provenance(*args, **kwargs)
+            def recording_outcome(service, *args, **kwargs):
+                outcome = original_outcome(service, *args, **kwargs)
                 outcomes.append(outcome)
                 return outcome
 
@@ -315,10 +408,6 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
                 patch.dict(
                     os.environ,
                     {"CLAUDE_TEST_TOKEN": "FAKE-SENSITIVE-ENVIRONMENT-VALUE"},
-                ),
-                patch(
-                    "release_notes_generator.workflow.filter_commits",
-                    side_effect=recording_filter,
                 ),
                 patch.object(
                     ClaudeCodeClient,
@@ -330,13 +419,13 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
                     "reduce",
                     new=recording_reduce,
                 ),
-                patch(
-                    "release_notes_generator.workflow."
-                    "summarize_diff_files_with_provenance",
-                    side_effect=recording_outcome,
+                patch.object(
+                    SummarizationService,
+                    "summarize",
+                    new=recording_outcome,
                 ),
             ):
-                result = ReleaseNotesWorkflow().run(runtime_path)
+                result = ReleaseNotesRunner().run(runtime_path)
 
             records = load_fake_claude_records(record_path)
             fixture_after = snapshot_linux_fixture(self.linux_repository)
@@ -449,12 +538,12 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
 
             with (
                 patch(
-                    "release_notes_generator.workflow.GitCommitExtractor.commits_in_range",
+                    "release_notes_generator.infrastructure.git.GitAdapter.commits_in_range",
                     side_effect=GitHistoryError("forced extraction failure"),
                 ),
                 self.assertRaisesRegex(GitHistoryError, "forced extraction failure"),
             ):
-                ReleaseNotesWorkflow(
+                ReleaseNotesRunner(
                     summary_client=RecordingSummaryClient()
                 ).run(runtime_path)
 
@@ -492,7 +581,7 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
             )
             before = snapshot_git_state(repository)
 
-            ReleaseNotesWorkflow(
+            ReleaseNotesRunner(
                 summary_client=RecordingSummaryClient()
             ).run(runtime_path)
 
@@ -548,10 +637,10 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
             )
 
             with patch(
-                "release_notes_generator.commits.subprocess.run",
+                "release_notes_generator.infrastructure.git.subprocess.run",
                 wraps=subprocess.run,
             ) as run:
-                result = ReleaseNotesWorkflow(
+                result = ReleaseNotesRunner(
                     summary_client=RecordingSummaryClient()
                 ).run(runtime_path)
 

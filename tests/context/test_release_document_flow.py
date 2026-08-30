@@ -1,14 +1,19 @@
 import unittest
 from datetime import date, datetime
 
-from release_notes_generator.commits import GitCommit, filter_commits
-from release_notes_generator.composition import compose_release_document
-from release_notes_generator.configuration import ModuleConfig, ModuleDefinition
+from release_notes_generator.domain.configuration import (
+    ContributorPolicy,
+    ModuleDefinition,
+    ModulePolicy,
+)
+from release_notes_generator.domain.repository import Commit
+from release_notes_generator.services.commit_selection import CommitSelectionService
+from release_notes_generator.services.release_document import ReleaseDocumentService
 
 
 class ReleaseDocumentFlowTests(unittest.TestCase):
     def test_filtered_dated_commits_flow_into_configured_module_context(self) -> None:
-        module_config = ModuleConfig(
+        module_config = ModulePolicy(
             modules=(
                 ModuleDefinition("Payments", ("PAY:",), "Customer Features"),
                 ModuleDefinition("Rewards", ("REWARD:",), "Customer Features"),
@@ -22,16 +27,14 @@ class ReleaseDocumentFlowTests(unittest.TestCase):
             _commit("unmapped", "approved@example.com", "OTHER: excluded", "2026-01-21"),
         )
 
-        accepted = filter_commits(
-            commits,
-            approved_author_emails=("approved@example.com",),
-            module_tags=module_config.module_tags,
+        accepted = CommitSelectionService().select(
+            commits, ContributorPolicy(("approved@example.com",)), module_config
         )
         summaries = {
             "Payments": "- Added transfers and refunds.",
             "Rewards": "- Added loyalty points.",
         }
-        document = compose_release_document(
+        document = ReleaseDocumentService().compose(
             summaries,
             module_config,
             repository_name="customer-platform",
@@ -64,8 +67,8 @@ def _commit(
     author_email: str,
     subject: str,
     authored_date: str,
-) -> GitCommit:
-    return GitCommit(
+) -> Commit:
+    return Commit(
         commit_hash,
         author_email,
         subject,
