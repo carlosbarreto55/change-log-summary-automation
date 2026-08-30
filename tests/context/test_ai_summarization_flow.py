@@ -3,10 +3,12 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from release_notes_generator.commits import ClassifiedCommit
-from release_notes_generator.composition import compose_release_document
-from release_notes_generator.configuration import ModuleConfig, ModuleDefinition
-from release_notes_generator.summarization import summarize_diff_files
+from release_notes_generator.domain.analysis import DiffArtifact
+from release_notes_generator.domain.configuration import ClaudeCodeAISettings, ModuleDefinition, ModulePolicy
+from release_notes_generator.domain.repository import ClassifiedCommit
+from release_notes_generator.infrastructure.artifacts import LocalArtifactStore
+from release_notes_generator.services.release_document import ReleaseDocumentService
+from release_notes_generator.services.summarization import SummarizationService
 
 
 class RecordingSummaryClient:
@@ -20,6 +22,28 @@ class RecordingSummaryClient:
     def reduce(self, module_name: str, partial_summaries: str) -> str:
         self.calls.append((module_name, partial_summaries))
         return "- Final"
+
+
+class UnusedFactory:
+    def create(self, settings, env_file):
+        raise AssertionError("injected client should bypass backend creation")
+
+
+def summarize_diff_files(diff_files, client, max_characters_per_request):
+    outcome = SummarizationService(
+        LocalArtifactStore(), UnusedFactory(), client
+    ).summarize(
+        tuple(DiffArtifact(name, path) for name, path in diff_files.items()),
+        ClaudeCodeAISettings("test", "test", max_characters_per_request),
+        None,
+    )
+    return outcome.summaries
+
+
+def compose_release_document(summaries, modules, repository_name, accepted_commits):
+    return ReleaseDocumentService().compose(
+        summaries, modules, repository_name, accepted_commits
+    )
 
 
 class AISummarizationFlowTests(unittest.TestCase):
@@ -69,7 +93,7 @@ class AISummarizationFlowTests(unittest.TestCase):
             )
             document = compose_release_document(
                 summaries,
-                ModuleConfig(
+                ModulePolicy(
                     modules=(
                         ModuleDefinition("Payments", ("PAY:",), "Customer Features"),
                     )

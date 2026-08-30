@@ -4,15 +4,17 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from release_notes_generator.commits import (
-    GitHistoryError,
+from release_notes_generator.domain.repository import (
     RepositoryStatus,
 )
-from release_notes_generator.diffs import DiffGenerationError
-from release_notes_generator.pdf_export import PDFGenerationError
-from release_notes_generator.repository_safety import RepositorySafetyError
-from release_notes_generator.summarization import AISummarizationError
-from release_notes_generator.workflow import ReleaseNotesWorkflow
+from release_notes_generator.services.errors import (
+    AISummarizationError,
+    DiffGenerationError,
+    GitHistoryError,
+    PDFGenerationError,
+    RepositorySafetyError,
+)
+from tests.context.application import ReleaseNotesRunner
 from tests.context.git_state import snapshot_git_state
 from tests.context.workflow_fixture import (
     configure_resolvable_upstream,
@@ -57,7 +59,7 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
             client = RecordingSummaryClient()
             before = snapshot_git_state(repository)
 
-            result = ReleaseNotesWorkflow(
+            result = ReleaseNotesRunner(
                 summary_client=client,
                 warning_handler=warnings.append,
             ).run(runtime_path)
@@ -91,7 +93,7 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
             client = RecordingSummaryClient()
             before = snapshot_git_state(repository)
 
-            ReleaseNotesWorkflow(
+            ReleaseNotesRunner(
                 summary_client=client,
                 warning_handler=warnings.append,
             ).run(runtime_path)
@@ -129,21 +131,21 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
                 if stage == "commits":
                     patches.append(
                         patch(
-                            "release_notes_generator.workflow.GitCommitExtractor.commits_in_range",
+                            "release_notes_generator.infrastructure.git.GitAdapter.commits_in_range",
                             side_effect=GitHistoryError("commit extraction failed"),
                         )
                     )
                 elif stage == "diff":
                     patches.append(
                         patch(
-                            "release_notes_generator.workflow.generate_diff_files",
+                            "release_notes_generator.services.diff_generation.DiffGenerationService.generate",
                             side_effect=DiffGenerationError("diff failed"),
                         )
                     )
                 elif stage == "pdf":
                     patches.append(
                         patch(
-                            "release_notes_generator.workflow.export_release_pdf",
+                            "release_notes_generator.infrastructure.reportlab_pdf.ReportLabPDFExporter.export",
                             side_effect=PDFGenerationError("PDF failed"),
                         )
                     )
@@ -152,7 +154,7 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
                     for active_patch in patches:
                         stack.enter_context(active_patch)
                     with self.assertRaises(error_type):
-                        ReleaseNotesWorkflow(summary_client=client).run(runtime_path)
+                        ReleaseNotesRunner(summary_client=client).run(runtime_path)
 
                 self.assertEqual(snapshot_git_state(repository), before)
                 self.assertFalse((root / "analysis" / "release.pdf").exists())
@@ -186,12 +188,12 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
                 before = snapshot_git_state(repository)
 
                 with (
-                    patch("release_notes_generator.workflow.update_repository") as update,
-                    patch("release_notes_generator.workflow.generate_diff_files") as generate,
-                    patch("release_notes_generator.workflow.export_release_pdf") as export,
+                    patch("release_notes_generator.infrastructure.git.GitAdapter.update") as update,
+                    patch("release_notes_generator.services.diff_generation.DiffGenerationService.generate") as generate,
+                    patch("release_notes_generator.infrastructure.reportlab_pdf.ReportLabPDFExporter.export") as export,
                     self.assertRaises(RepositorySafetyError),
                 ):
-                    ReleaseNotesWorkflow(
+                    ReleaseNotesRunner(
                         summary_client=RecordingSummaryClient()
                     ).run(runtime_path)
 
@@ -220,10 +222,10 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
                 before = snapshot_git_state(repository)
 
                 with (
-                    patch("release_notes_generator.workflow.update_repository") as update,
+                    patch("release_notes_generator.infrastructure.git.GitAdapter.update") as update,
                     self.assertRaises(RepositorySafetyError),
                 ):
-                    ReleaseNotesWorkflow(
+                    ReleaseNotesRunner(
                         summary_client=RecordingSummaryClient()
                     ).run(runtime_path)
 
@@ -247,16 +249,16 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
             before = snapshot_git_state(repository)
 
             with (
-                patch("release_notes_generator.workflow.GitCommitExtractor") as extractor,
-                patch("release_notes_generator.workflow.generate_diff_files") as generate,
+                patch("release_notes_generator.infrastructure.git.GitAdapter.resolve_release_range") as extractor,
+                patch("release_notes_generator.services.diff_generation.DiffGenerationService.generate") as generate,
                 patch(
-                    "release_notes_generator.workflow."
-                    "summarize_diff_files_with_provenance"
+                    "release_notes_generator.services.summarization."
+                    "SummarizationService.summarize"
                 ) as summarize,
-                patch("release_notes_generator.workflow.export_release_pdf") as export,
+                patch("release_notes_generator.infrastructure.reportlab_pdf.ReportLabPDFExporter.export") as export,
                 self.assertRaises(GitHistoryError),
             ):
-                ReleaseNotesWorkflow(
+                ReleaseNotesRunner(
                     summary_client=RecordingSummaryClient()
                 ).run(runtime_path)
 
@@ -300,7 +302,7 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
                 before = snapshot_git_state(repository)
 
                 with self.assertRaises(GitHistoryError):
-                    ReleaseNotesWorkflow(
+                    ReleaseNotesRunner(
                         summary_client=RecordingSummaryClient()
                     ).run(runtime_path)
 
@@ -338,7 +340,7 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
             before = snapshot_git_state(repository)
             warnings: list[str] = []
 
-            ReleaseNotesWorkflow(
+            ReleaseNotesRunner(
                 summary_client=RecordingSummaryClient(),
                 warning_handler=warnings.append,
             ).run(runtime_path)
@@ -408,15 +410,15 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
 
                 with (
                     patch(
-                        "release_notes_generator.workflow.inspect_repository",
+                        "release_notes_generator.infrastructure.git.GitAdapter.inspect",
                         return_value=status,
                     ),
                     patch(
-                        "release_notes_generator.workflow.update_repository",
+                        "release_notes_generator.infrastructure.git.GitAdapter.update",
                         return_value=status,
                     ),
                 ):
-                    ReleaseNotesWorkflow(
+                    ReleaseNotesRunner(
                         summary_client=RecordingSummaryClient(),
                         warning_handler=warnings.append,
                     ).run(runtime_path)

@@ -3,37 +3,31 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from release_notes_generator.claude_code import (
+from release_notes_generator.infrastructure.artifacts import LocalArtifactStore
+from release_notes_generator.infrastructure.claude_code import (
     ClaudeCodeClient,
     parse_claude_version_output,
 )
-from release_notes_generator.commits import (
-    GitCommitExtractor,
-    filter_commits,
-    group_commit_hashes_by_module,
-)
-from release_notes_generator.configuration import (
-    load_ai_config,
-    load_module_config,
-    load_release_marker_config,
-    load_runtime_config,
-    load_user_config,
-)
-from release_notes_generator.diffs import delete_diff_files, generate_diff_files
-from release_notes_generator.paths import CONFIG_DIR
-from release_notes_generator.summarization import (
-    AISummarizationError,
-    summarize_diff_files_with_provenance,
-)
+from release_notes_generator.infrastructure.git import GitAdapter
+from release_notes_generator.infrastructure.json_reader import FileJSONReader
+from release_notes_generator.infrastructure.openai import SummaryClientFactoryAdapter
+from release_notes_generator.services.commit_selection import CommitSelectionService
+from release_notes_generator.services.configuration import ConfigurationService
+from release_notes_generator.services.diff_generation import DiffGenerationService
+from release_notes_generator.services.errors import AISummarizationError
+from release_notes_generator.services.summarization import SummarizationService
 from tests.integration.git_fixture_state import snapshot_linux_fixture
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = PROJECT_ROOT / "config"
 LIVE_OPT_IN_ENV_VAR = "RUN_LIVE_CLAUDE_CODE_IT"
 LOGIN_ATTESTATION_ENV_VAR = "CLAUDE_CODE_OPERATOR_LOGGED_IN"
 WORKFLOW_LINUX_IT_CONFIG_PATH = CONFIG_DIR / "workflowLinuxIT.json"
@@ -75,7 +69,9 @@ class LiveClaudeCodeLinuxIntegrationTests(unittest.TestCase):
         except AISummarizationError as exc:
             raise unittest.SkipTest(str(exc)) from None
 
-        cls.runtime_config = load_runtime_config(WORKFLOW_LINUX_IT_CONFIG_PATH)
+        cls.runtime_config = ConfigurationService(FileJSONReader()).load(
+            WORKFLOW_LINUX_IT_CONFIG_PATH
+        )
         cls.linux_repository = cls.runtime_config.repository_path
         if not cls.linux_repository.exists():
             raise unittest.SkipTest(
@@ -98,25 +94,25 @@ class LiveClaudeCodeLinuxIntegrationTests(unittest.TestCase):
         self,
     ) -> None:
         before = snapshot_linux_fixture(self.linux_repository)
-        ai_config = load_ai_config(CLAUDE_AI_IT_CONFIG_PATH)
-        module_config = load_module_config(self.runtime_config.module_config_path)
+        ai_config = _load_ai_settings(CLAUDE_AI_IT_CONFIG_PATH)
+        module_config = self.runtime_config.modules
         selected_commits = _one_accepted_commit_per_module(self.runtime_config)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             diff_directory = Path(temp_dir) / "diffs"
-            diff_files = generate_diff_files(
+            diff_directory.mkdir()
+            store = LocalArtifactStore()
+            artifacts = DiffGenerationService(GitAdapter(), store).generate(
                 self.linux_repository,
-                group_commit_hashes_by_module(selected_commits),
+                CommitSelectionService().group(selected_commits),
                 diff_directory,
             )
             try:
-                outcome = summarize_diff_files_with_provenance(
-                    diff_files,
-                    ClaudeCodeClient(ai_config),
-                    ai_config.max_diff_characters_per_request,
-                )
+                outcome = SummarizationService(
+                    store, SummaryClientFactoryAdapter(), ClaudeCodeClient(ai_config)
+                ).summarize(artifacts, ai_config, None)
             finally:
-                delete_diff_files(diff_files.values())
+                store.delete(artifacts)
 
             self.assertEqual(tuple(diff_directory.glob("diff_*.md")), ())
             self.assertEqual(
@@ -135,20 +131,20 @@ class LiveClaudeCodeLinuxIntegrationTests(unittest.TestCase):
 
 
 def _one_accepted_commit_per_module(runtime_config):
-    if runtime_config.release_marker_config_path is None:
+    if runtime_config.release_marker is None:
         raise AssertionError("Linux live integration requires marker mode.")
-    marker = load_release_marker_config(runtime_config.release_marker_config_path).marker
-    user_config = load_user_config(runtime_config.user_config_path)
-    module_config = load_module_config(runtime_config.module_config_path)
-    extractor = GitCommitExtractor(runtime_config.repository_path)
-    release_range = extractor.resolve_release_range(
+    module_config = runtime_config.modules
+    git = GitAdapter()
+    release_range = git.resolve_release_range(
+        runtime_config.repository_path,
         runtime_config.head_ref,
-        release_marker=marker,
+        base_ref=runtime_config.base_ref,
+        release_marker=runtime_config.release_marker,
     )
-    accepted_commits = filter_commits(
-        extractor.commits_in_range(release_range),
-        user_config.approved_author_emails,
-        module_config.module_tags,
+    accepted_commits = CommitSelectionService().select(
+        git.commits_in_range(runtime_config.repository_path, release_range),
+        runtime_config.contributors,
+        module_config,
     )
     selected = {}
     for commit in accepted_commits:
@@ -160,6 +156,27 @@ def _one_accepted_commit_per_module(runtime_config):
             f"No accepted Linux commits found for modules: {sorted(missing_modules)}"
         )
     return tuple(selected[module_name] for module_name in module_config.module_tags)
+
+
+def _load_ai_settings(ai_path: Path):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        runtime_path = Path(temp_dir) / "workflow.json"
+        runtime_path.write_text(
+            json.dumps(
+                {
+                    "repository_path": "/tmp/repository",
+                    "head_ref": "head",
+                    "base_ref": "base",
+                    "user_config_path": str(CONFIG_DIR / "userIT.json"),
+                    "module_config_path": str(CONFIG_DIR / "moduleIT.json"),
+                    "ai_config_path": str(ai_path),
+                    "temp_diff_dir": "/tmp/diffs",
+                    "output_path": "/tmp/release.pdf",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return ConfigurationService(FileJSONReader()).load(runtime_path).ai
 
 
 if __name__ == "__main__":

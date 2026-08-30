@@ -9,10 +9,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from release_notes_generator.claude_code import ClaudeCodeClient
-from release_notes_generator.configuration import ClaudeCodeAIConfig
-from release_notes_generator.summarization import AISummarizationError
-from release_notes_generator.workflow import ReleaseNotesWorkflow
+from release_notes_generator.infrastructure.claude_code import ClaudeCodeClient
+from release_notes_generator.domain.configuration import ClaudeCodeAISettings
+from release_notes_generator.services.errors import AISummarizationError
+from tests.context.application import ReleaseNotesRunner
 from tests.claude_code_harness import (
     installed_fake_claude,
     load_fake_claude_records,
@@ -37,8 +37,8 @@ EXPECTED_REQUEST_ARGUMENT_NAMES = [
 ]
 
 
-def _claude_config(max_characters: int = 12_000) -> ClaudeCodeAIConfig:
-    return ClaudeCodeAIConfig(
+def _claude_config(max_characters: int = 12_000) -> ClaudeCodeAISettings:
+    return ClaudeCodeAISettings(
         model="claude-model",
         prompt="Summarize release-note diffs.",
         max_diff_characters_per_request=max_characters,
@@ -88,7 +88,7 @@ class ClaudeCodeRealSubprocessTests(unittest.TestCase):
             with (
                 installed_fake_claude(root) as record_path,
                 patch(
-                    "release_notes_generator.claude_code.tempfile.mkdtemp",
+                    "release_notes_generator.infrastructure.claude_code.tempfile.mkdtemp",
                     side_effect=recording_mkdtemp,
                 ),
             ):
@@ -171,7 +171,7 @@ class ClaudeCodeRealSubprocessFailureTests(unittest.TestCase):
                     installed_fake_claude(root, mode=mode),
                     self.assertRaises(AISummarizationError) as context,
                 ):
-                    ReleaseNotesWorkflow(summary_client=client).run(runtime_path)
+                    ReleaseNotesRunner(summary_client=client).run(runtime_path)
 
                 self.assertEqual(output_path.read_bytes(), b"existing pdf content")
                 self.assertEqual(
