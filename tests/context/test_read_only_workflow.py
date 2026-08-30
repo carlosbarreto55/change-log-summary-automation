@@ -249,7 +249,10 @@ class ReadOnlyWorkflowProofTests(unittest.TestCase):
             with (
                 patch("release_notes_generator.workflow.GitCommitExtractor") as extractor,
                 patch("release_notes_generator.workflow.generate_diff_files") as generate,
-                patch("release_notes_generator.workflow.summarize_diff_files") as summarize,
+                patch(
+                    "release_notes_generator.workflow."
+                    "summarize_diff_files_with_provenance"
+                ) as summarize,
                 patch("release_notes_generator.workflow.export_release_pdf") as export,
                 self.assertRaises(GitHistoryError),
             ):
