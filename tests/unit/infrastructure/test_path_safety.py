@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
@@ -13,6 +14,23 @@ from release_notes_generator.infrastructure.path_safety import (
     validate_analysis_paths,
 )
 from release_notes_generator.services.errors import RepositorySafetyError
+
+
+def _can_create_symlinks() -> bool:
+    """Check if the current user can create symlinks (requires admin on Windows)."""
+    if sys.platform != "win32":
+        return True
+    # On Windows, try to create a symlink to check for privileges
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            test_dir = Path(tmp)
+            target = test_dir / "target"
+            target.mkdir()
+            link = test_dir / "link"
+            link.symlink_to(target, target_is_directory=True)
+            return True
+    except OSError:
+        return False
 
 
 class RepositorySafetyTests(unittest.TestCase):
@@ -115,6 +133,7 @@ class RepositorySafetyTests(unittest.TestCase):
         self.assertEqual(tuple(self.external.iterdir()), (output_path.parent,))
         self.assertFalse(output_path.exists())
 
+    @unittest.skipUnless(_can_create_symlinks(), "Symlink creation requires admin privileges on Windows")
     def test_commit_list_revalidation_rejects_output_alias_into_worktree(self) -> None:
         output_path = self.external / "alias" / "release.pdf"
         paths = self.validate_commit_list(output_path)
@@ -241,6 +260,7 @@ class RepositorySafetyTests(unittest.TestCase):
 
         self.assertFalse((self.repository / "tmp").exists())
 
+    @unittest.skipUnless(_can_create_symlinks(), "Symlink creation requires admin privileges on Windows")
     def test_rejects_existing_symlink_aliases_into_worktree(self) -> None:
         alias = self.root / "repository-alias"
         alias.symlink_to(self.repository, target_is_directory=True)
@@ -253,6 +273,7 @@ class RepositorySafetyTests(unittest.TestCase):
         self.assertFalse((self.repository / "diffs").exists())
         self.assertFalse((self.repository / "release.pdf").exists())
 
+    @unittest.skipUnless(_can_create_symlinks(), "Symlink creation requires admin privileges on Windows")
     def test_rejects_nonexistent_suffix_below_symlink_ancestor(self) -> None:
         alias = self.root / "repository-alias"
         alias.symlink_to(self.repository, target_is_directory=True)
@@ -292,6 +313,7 @@ class RepositorySafetyTests(unittest.TestCase):
         self.assertTrue(output_path.parent.is_dir())
         self.assertFalse(output_path.exists())
 
+    @unittest.skipUnless(_can_create_symlinks(), "Symlink creation requires admin privileges on Windows")
     def test_revalidation_rejects_temp_path_replaced_by_internal_symlink(self) -> None:
         self.external.mkdir()
         temp_diff_dir = self.external / "diffs"

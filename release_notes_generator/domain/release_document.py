@@ -16,6 +16,21 @@ class ReleaseCommitEntry:
 
 
 @dataclass(frozen=True)
+class TaskReference:
+    """A task or PLM reference extracted from a commit subject.
+
+    Attributes:
+        reference_id: The task/PLM identifier (e.g., "WLT-123", "P260820-05441")
+        module_name: The module to which the source commit was classified
+        reference_count: Number of times this reference appears
+    """
+
+    reference_id: str
+    module_name: str
+    reference_count: int
+
+
+@dataclass(frozen=True)
 class ReleaseModuleSummary:
     """One configured module and its generated summary."""
 
@@ -49,6 +64,23 @@ class ReleaseSection:
 
 
 @dataclass(frozen=True)
+class TaskReferenceSection:
+    """A section containing task/PLM references grouped by module.
+
+    This section provides a cross-cutting view of all task references
+    extracted from commit subjects, showing reference frequency and
+    module context.
+
+    Attributes:
+        title: Section title (always "Task References")
+        references: Tuple of TaskReference objects sorted by module and reference_id
+    """
+
+    title: str = "Task References"
+    references: tuple[TaskReference, ...] = ()
+
+
+@dataclass(frozen=True)
 class ReleaseDocument:
     """Ordered release-note content independent from an output format."""
 
@@ -58,6 +90,7 @@ class ReleaseDocument:
     change_start_date: Optional[date]
     change_end_date: Optional[date]
     sections: tuple[ReleaseSection, ...]
+    task_reference_section: Optional[TaskReferenceSection] = None
     empty_message: Optional[str] = None
 
     @property

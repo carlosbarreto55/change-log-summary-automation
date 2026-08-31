@@ -11,7 +11,10 @@ from release_notes_generator.services.configuration import ConfigurationService
 from release_notes_generator.services.contracts import PDFExporter, PathValidator
 from release_notes_generator.services.diff_generation import DiffGenerationService
 from release_notes_generator.services.errors import ConfigurationError
-from release_notes_generator.services.release_document import ReleaseDocumentService
+from release_notes_generator.services.release_document import (
+    ReleaseDocumentService,
+    build_task_patterns_from_config,
+)
 from release_notes_generator.services.repository_analysis import RepositoryAnalysisService
 from release_notes_generator.services.summarization import SummarizationService
 
@@ -86,10 +89,14 @@ class ReleaseNotesService:
 
         if configuration.report_mode is ReportMode.COMMIT_LIST:
             paths = self._paths.prepare(paths)
+            task_patterns = build_task_patterns_from_config(
+                configuration.modules.task_patterns
+            )
             document = self._documents.compose_commit_list(
                 configuration.modules,
                 paths.repository_root.name,
                 accepted,
+                task_patterns,
             )
             paths = self._paths.revalidate(paths)
             return self._pdf.export(document, paths.output_path)
@@ -114,11 +121,15 @@ class ReleaseNotesService:
             outcome = self._summarization.summarize(
                 artifacts, configuration.ai, configuration.env_file_path
             )
+            task_patterns = build_task_patterns_from_config(
+                configuration.modules.task_patterns
+            )
             document = self._documents.compose(
                 outcome.summaries,
                 configuration.modules,
                 paths.repository_root.name,
                 accepted,
+                task_patterns,
             )
             paths = self._paths.revalidate(paths)
             return self._pdf.export(document, paths.output_path)

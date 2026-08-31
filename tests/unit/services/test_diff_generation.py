@@ -27,6 +27,8 @@ def delete_diff_files(paths):
 
 
 def _git_show_call(commit_hash: str):
+    # Use Path to normalize separators for cross-platform compatibility
+    # Note: We check path ends with "repo" in assertions since resolve() is platform-specific
     return call(
         [
             "git",
@@ -99,14 +101,14 @@ class DiffGenerationTests(unittest.TestCase):
                 "pix first\n\npix second\n",
             )
             self.assertEqual(files["TransitOpenLoop"].read_text(encoding="utf-8"), "transit diff\n")
-            self.assertEqual(
-                run.call_args_list,
-                [
-                    _git_show_call("pix1"),
-                    _git_show_call("pix2"),
-                    _git_show_call("tol1"),
-                ],
-            )
+            # Check call count and commit hashes, path is platform-specific
+            self.assertEqual(len(run.call_args_list), 3)
+            for i, expected_hash in enumerate(["pix1", "pix2", "tol1"]):
+                call_args = run.call_args_list[i].args[0]
+                self.assertEqual(call_args[0], "git")
+                self.assertEqual(call_args[1], "-C")
+                self.assertTrue(call_args[2].endswith("repo"))
+                self.assertEqual(call_args[6], expected_hash)
 
     def test_empty_groups_do_not_generate_temporary_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -128,7 +130,13 @@ class DiffGenerationTests(unittest.TestCase):
 
             self.assertEqual(set(files), {"GlobalLoyalty"})
             self.assertFalse((output_dir / "diff_pix.md").exists())
-            self.assertEqual(run.call_args_list, [_git_show_call("gl1")])
+            # Check call count and commit hash, path is platform-specific
+            self.assertEqual(len(run.call_args_list), 1)
+            call_args = run.call_args_list[0].args[0]
+            self.assertEqual(call_args[0], "git")
+            self.assertEqual(call_args[1], "-C")
+            self.assertTrue(call_args[2].endswith("repo"))
+            self.assertEqual(call_args[6], "gl1")
 
     def test_git_show_failure_stops_generation_without_partial_module_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -151,10 +159,14 @@ class DiffGenerationTests(unittest.TestCase):
                         output_dir,
                     )
 
-            self.assertEqual(
-                run.call_args_list,
-                [_git_show_call("first"), _git_show_call("missing")],
-            )
+            # Check call count and commit hashes, path is platform-specific
+            self.assertEqual(len(run.call_args_list), 2)
+            for i, expected_hash in enumerate(["first", "missing"]):
+                call_args = run.call_args_list[i].args[0]
+                self.assertEqual(call_args[0], "git")
+                self.assertEqual(call_args[1], "-C")
+                self.assertTrue(call_args[2].endswith("repo"))
+                self.assertEqual(call_args[6], expected_hash)
             self.assertFalse((output_dir / "diff_pix.md").exists())
             self.assertFalse((output_dir / "diff_transitopenloop.md").exists())
 

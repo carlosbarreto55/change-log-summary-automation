@@ -504,19 +504,19 @@ class RepositoryUpdateModeTests(unittest.TestCase):
             release_range = extractor.resolve_release_range("origin/main", base_ref="v1")
 
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(
-            commands[0],
-            [
-                "git",
-                "-C",
-                "/repo",
-                "fetch",
-                "--no-tags",
-                "--no-write-fetch-head",
-                "origin",
-                *refspecs,
-            ],
-        )
+        # Normalize path separators for cross-platform comparison
+        self.assertEqual(len(commands[0]), 9)
+        self.assertEqual(commands[0][0], "git")
+        self.assertEqual(commands[0][1], "-C")
+        # Path is platform-specific, just check it ends with "repo"
+        self.assertTrue(commands[0][2].endswith("repo"))
+        self.assertEqual(commands[0][3:], [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            *refspecs,
+        ])
         self.assertNotIn("env", run.call_args_list[0].kwargs)
         self.assertEqual(release_range, ReleaseRange("base-sha", "head-sha"))
         self.assertEqual(
