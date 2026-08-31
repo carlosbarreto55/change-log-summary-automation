@@ -3,7 +3,7 @@
 ### Requirement: PDF content follows configured sections
 The system SHALL render the mode-specific report title followed by non-empty configured section headings, module headings, and either AI-generated module summaries or deterministic commit-list entries in configured order.
 
-#### Scenario: AI-summary section contains multiple modules
+#### Scenario: Section contains multiple modules
 - **WHEN** multiple included modules share a configured section in `ai_summary` mode
 - **THEN** the PDF renders the section once and renders each module heading and summary beneath it in module configuration order
 

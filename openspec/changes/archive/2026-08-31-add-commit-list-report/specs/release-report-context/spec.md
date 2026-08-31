@@ -26,7 +26,7 @@ The system SHALL render report context using the existing Unicode-capable PDF pa
 - **WHEN** the derived repository name contains characters supported by the embedded font
 - **THEN** the repository name renders without an encoding failure
 
-#### Scenario: Context-rich AI summary PDF renders successfully
+#### Scenario: Context-rich PDF renders successfully
 - **WHEN** report metadata, sections, module summaries, and output writing succeed
 - **THEN** the configured destination is atomically replaced by a valid PDF containing the context metadata
 
