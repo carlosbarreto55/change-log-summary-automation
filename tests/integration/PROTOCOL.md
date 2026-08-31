@@ -107,14 +107,16 @@ All integration settings live under `config/`:
 - `aiClaudeCodeIT.json` — keyless Claude Code backend, model, prompt, and the
   same request character limit
 - `workflowLinuxIT.json` — fixture path, explicit head, marker selector, and
-  external temporary diff/PDF paths
+  external temporary diff/PDF paths for `ai_summary`
+- `workflowLinuxCommitListIT.json` — the same frozen fixture selection for
+  `commit_list`, with a PDF path and no AI, environment, or temporary-diff fields
 
 Runtime code always receives a configuration file path. Each workflow
 integration copies the committed runtime JSON into its framework-managed
 temporary directory and replaces only fields required by that scenario.
 Repository, head, lower-boundary selector, and referenced JSON paths are loaded
-through that runtime JSON rather than hard-coded as ambient Git state. Diffs and
-PDFs are always placed under the test temporary directory.
+through that runtime JSON rather than hard-coded as ambient Git state. Diffs,
+when applicable, and PDFs are always placed under the test temporary directory.
 
 ## Test Shape
 
@@ -137,6 +139,9 @@ The non-live integration suite covers:
 - Full fake-Claude workflow coverage for bounded initial and reduction calls,
   fresh-process isolation, secret-free provenance, PDF generation, diff
   cleanup, and exact fixture preservation.
+- Deterministic commit-list coverage for exact oldest-first subjects and full
+  object IDs, configured module order and counts, zero diff/AI artifacts, valid
+  PDF output, and exact fixture preservation.
 
 Assertions prefer stable lower thresholds and invariants over exact current counts.
 

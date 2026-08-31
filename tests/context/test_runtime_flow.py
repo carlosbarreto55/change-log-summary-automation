@@ -4,12 +4,19 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from release_notes_generator.infrastructure.git import GitAdapter
 from release_notes_generator.infrastructure.json_reader import FileJSONReader
+from release_notes_generator.infrastructure.openai import SummaryClientFactoryAdapter
+from release_notes_generator.infrastructure.reportlab_pdf import ReportLabPDFExporter
 from release_notes_generator.presentation.composition import compose_release_notes_service
+from release_notes_generator.services.commit_selection import CommitSelectionService
 from release_notes_generator.services.configuration import ConfigurationService
+from release_notes_generator.services.diff_generation import DiffGenerationService
 from release_notes_generator.services.errors import ConfigurationError
 from release_notes_generator.services.release_notes import WORKFLOW_STEPS, ReleaseNotesService
+from release_notes_generator.services.summarization import SummarizationService
 from tests.context.workflow_fixture import create_repository, write_runtime_configuration
 
 
@@ -45,6 +52,71 @@ def _configuration_gated_service(paths: RecordingPathValidator) -> ReleaseNotesS
 
 
 class RuntimeFlowTests(unittest.TestCase):
+    def test_commit_list_fixture_omits_ai_environment_and_diff_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repository, _, _ = create_repository(root)
+
+            runtime_path = write_runtime_configuration(
+                root, repository, report_mode="commit_list"
+            )
+            runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(runtime["report_mode"], "commit_list")
+            self.assertNotIn("ai_config_path", runtime)
+            self.assertNotIn("env_file_path", runtime)
+            self.assertNotIn("temp_diff_dir", runtime)
+            self.assertFalse((root / "config" / "ai.json").exists())
+
+    def test_commit_list_real_git_flow_exports_exact_commit_without_temp_analysis(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repository, base_sha, head_sha = create_repository(root)
+            output_path = root / "output" / "commit-report.pdf"
+            runtime_path = write_runtime_configuration(
+                root,
+                repository,
+                marker_mode=False,
+                base_ref=base_sha,
+                output_path=output_path,
+                report_mode="commit_list",
+            )
+            documents = []
+            original_export = ReportLabPDFExporter.export
+
+            def recording_export(exporter, document, destination):
+                documents.append(document)
+                return original_export(exporter, document, destination)
+
+            forbidden = AssertionError("commit_list must not perform diff or AI work")
+            with (
+                patch.object(CommitSelectionService, "group", side_effect=forbidden),
+                patch.object(GitAdapter, "show", side_effect=forbidden),
+                patch.object(DiffGenerationService, "generate", side_effect=forbidden),
+                patch.object(DiffGenerationService, "cleanup", side_effect=forbidden),
+                patch.object(SummaryClientFactoryAdapter, "create", side_effect=forbidden),
+                patch.object(SummarizationService, "summarize", side_effect=forbidden),
+                patch.object(ReportLabPDFExporter, "export", new=recording_export),
+            ):
+                output = compose_release_notes_service().generate(runtime_path)
+
+            self.assertEqual(output, output_path.resolve())
+            self.assertEqual(output.read_bytes()[:5], b"%PDF-")
+            self.assertEqual(len(documents), 1)
+            document = documents[0]
+            self.assertEqual(document.title, "Release Commit Report")
+            self.assertEqual(document.qualifying_change_count, 1)
+            self.assertEqual(len(document.sections), 1)
+            module = document.sections[0].modules[0]
+            self.assertEqual(module.name, "Pix")
+            self.assertEqual(
+                tuple((entry.subject, entry.commit_hash) for entry in module.commits),
+                (("Pix: committed feature", head_sha),),
+            )
+            self.assertFalse((root / "analysis").exists())
+
     def test_expected_runtime_flow_is_declared_in_order(self) -> None:
         self.assertEqual(
             list(WORKFLOW_STEPS),
@@ -56,13 +128,11 @@ class RuntimeFlowTests(unittest.TestCase):
                 "freeze release-range boundaries",
                 "capture commits from frozen range",
                 "filter and classify commits",
-                "group accepted commits by category",
-                "prepare validated external destinations",
-                "generate category diff files",
-                "lazily initialize AI and summarize",
+                "prepare validated report destinations",
+                "produce configured report content",
                 "compose configured release document",
-                "revalidate and export final PDF release notes",
-                "delete temporary diff files",
+                "revalidate and export final PDF report",
+                "clean up report-specific temporary artifacts",
             ],
         )
 

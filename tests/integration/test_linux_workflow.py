@@ -16,6 +16,7 @@ from release_notes_generator.domain.configuration import (
     ModuleDefinition,
     ModulePolicy,
     OpenAICompatibleAISettings,
+    ReportMode,
     WorkflowConfiguration,
 )
 from release_notes_generator.domain.summarization import SummarizationProvenance
@@ -39,6 +40,9 @@ from tests.integration.git_fixture_state import snapshot_linux_fixture
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "config"
 WORKFLOW_LINUX_IT_CONFIG_PATH = CONFIG_DIR / "workflowLinuxIT.json"
+WORKFLOW_LINUX_COMMIT_LIST_IT_CONFIG_PATH = (
+    CONFIG_DIR / "workflowLinuxCommitListIT.json"
+)
 EXPECTED_HEAD_SHA = "b95f03f04d475aa6719d15a636ddf32222d55657"
 EXPECTED_MARKER_SHA = "8cd9520d35a6c38db6567e97dd93b1f11f185dc6"
 EXPECTED_MODULES = ("Wi-Fi", "Network Core", "KVM", "ALSA SoC", "KSMBD")
@@ -61,7 +65,10 @@ class RuntimeConfig:
         base = Path(path).resolve(strict=False).parent
         self.user_config_path = _resolve_reference(raw["user_config_path"], base)
         self.module_config_path = _resolve_reference(raw["module_config_path"], base)
-        self.ai_config_path = _resolve_reference(raw["ai_config_path"], base)
+        ai_path = raw.get("ai_config_path")
+        self.ai_config_path = (
+            _resolve_reference(ai_path, base) if isinstance(ai_path, str) else None
+        )
         marker_path = raw.get("release_marker_config_path")
         self.release_marker_config_path = (
             _resolve_reference(marker_path, base)
@@ -288,6 +295,94 @@ class LinuxWorkflowIntegrationTests(unittest.TestCase):
                 for commit in accepted_commits
             )
         )
+
+    def test_commit_list_linux_workflow_is_exact_and_has_no_diff_or_ai_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            runtime_path = _temporary_commit_list_runtime_config(
+                temp_root,
+                repository_path=self.linux_repository,
+            )
+            runtime_config = load_runtime_config(runtime_path)
+            accepted_commits = tuple(_accepted_linux_commits(runtime_config))
+            documents = []
+            original_export = ReportLabPDFExporter.export
+
+            def recording_export(exporter, document, destination):
+                documents.append(document)
+                return original_export(exporter, document, destination)
+
+            fixture_before = snapshot_linux_fixture(self.linux_repository)
+            with patch.object(
+                ReportLabPDFExporter,
+                "export",
+                new=recording_export,
+            ):
+                result = ReleaseNotesRunner().run(runtime_path)
+            fixture_after = snapshot_linux_fixture(self.linux_repository)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(fixture_after, fixture_before)
+            self.assertIs(runtime_config.report_mode, ReportMode.COMMIT_LIST)
+            self.assertIsNone(runtime_config.ai)
+            self.assertIsNone(runtime_config.env_file_path)
+            self.assertIsNone(runtime_config.temp_diff_dir)
+            self.assertEqual(runtime_config.output_path.read_bytes()[:5], b"%PDF-")
+            self.assertFalse((temp_root / "analysis").exists())
+
+            self.assertEqual(len(accepted_commits), 368)
+            self.assertEqual(
+                {commit.author_email for commit in accepted_commits},
+                set(load_user_config(runtime_config.user_config_path).approved_author_emails),
+            )
+            self.assertEqual(
+                {
+                    module_name: sum(
+                        commit.module_name == module_name
+                        for commit in accepted_commits
+                    )
+                    for module_name in EXPECTED_MODULES
+                },
+                EXPECTED_MODULE_COUNTS,
+            )
+
+            self.assertEqual(len(documents), 1)
+            document = documents[0]
+            self.assertEqual(document.title, "Release Commit Report")
+            self.assertEqual(document.repository_name, "linux")
+            self.assertEqual(document.qualifying_change_count, 368)
+            self.assertEqual(
+                tuple(section.title for section in document.sections),
+                EXPECTED_SECTIONS,
+            )
+            rendered_modules = tuple(
+                module
+                for section in document.sections
+                for module in section.modules
+            )
+            self.assertEqual(
+                tuple(module.name for module in rendered_modules),
+                EXPECTED_MODULES,
+            )
+            for module in rendered_modules:
+                expected_entries = tuple(
+                    (commit.subject, commit.commit_hash)
+                    for commit in accepted_commits
+                    if commit.module_name == module.name
+                )
+                self.assertEqual(module.qualifying_change_count, len(expected_entries))
+                self.assertEqual(
+                    tuple(
+                        (entry.subject, entry.commit_hash)
+                        for entry in module.commits
+                    ),
+                    expected_entries,
+                )
+                self.assertTrue(
+                    all(len(entry.commit_hash) == 40 for entry in module.commits)
+                )
 
     def test_direct_linux_read_only_workflow_writes_only_temporary_artifacts(
         self,
@@ -743,6 +838,34 @@ def _temporary_runtime_config(
         runtime_data.pop(field_name, None)
 
     runtime_config_path = temp_root / "workflowLinuxIT.json"
+    runtime_config_path.write_text(
+        json.dumps(runtime_data, indent=2),
+        encoding="utf-8",
+    )
+    return runtime_config_path
+
+
+def _temporary_commit_list_runtime_config(
+    temp_root: Path,
+    *,
+    repository_path: Path,
+) -> Path:
+    committed = load_runtime_config(WORKFLOW_LINUX_COMMIT_LIST_IT_CONFIG_PATH)
+    runtime_data = json.loads(
+        WORKFLOW_LINUX_COMMIT_LIST_IT_CONFIG_PATH.read_text(encoding="utf-8")
+    )
+    if committed.release_marker_config_path is None:
+        raise AssertionError("Linux commit-list JSON must select marker mode.")
+    runtime_data.update(
+        {
+            "repository_path": str(repository_path),
+            "user_config_path": str(committed.user_config_path),
+            "module_config_path": str(committed.module_config_path),
+            "release_marker_config_path": str(committed.release_marker_config_path),
+            "output_path": str(temp_root / "output" / "commit_report.pdf"),
+        }
+    )
+    runtime_config_path = temp_root / "workflowLinuxCommitListIT.json"
     runtime_config_path.write_text(
         json.dumps(runtime_data, indent=2),
         encoding="utf-8",

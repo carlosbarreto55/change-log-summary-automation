@@ -118,6 +118,68 @@ class WheelBackendConfigurationTests(unittest.TestCase):
             openai_runtime_path = write_runtime("openai", openai_path)
             claude_runtime_path = write_runtime("claude", claude_path)
 
+            commit_list_root = root / "commit-list"
+            repository = commit_list_root / "repository"
+            repository.mkdir(parents=True)
+
+            def run_git(*args: str) -> str:
+                result = subprocess.run(
+                    ["git", "-C", str(repository), *args],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                return result.stdout.strip()
+
+            run_git("init", "--quiet", "--initial-branch=main")
+            run_git("config", "user.name", "Package Test")
+            run_git("config", "user.email", "package@example.com")
+            source_path = repository / "source.txt"
+            source_path.write_text("base\n", encoding="utf-8")
+            run_git("add", "source.txt")
+            run_git("commit", "--quiet", "-m", "Release base")
+            base_sha = run_git("rev-parse", "HEAD")
+            source_path.write_text("base\nfeature\n", encoding="utf-8")
+            run_git("add", "source.txt")
+            run_git("commit", "--quiet", "-m", "Pkg: installed report")
+            head_sha = run_git("rev-parse", "HEAD")
+
+            commit_user_path = commit_list_root / "user.json"
+            commit_module_path = commit_list_root / "module.json"
+            commit_runtime_path = commit_list_root / "workflow.json"
+            commit_output_path = commit_list_root / "output" / "report.pdf"
+            commit_user_path.write_text(
+                '{"approved_author_emails": ["package@example.com"]}',
+                encoding="utf-8",
+            )
+            commit_module_path.write_text(
+                json.dumps(
+                    {
+                        "modules": [
+                            {
+                                "name": "Package",
+                                "tags": ["Pkg:"],
+                                "section": "Installed",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            commit_runtime = {
+                "report_mode": "commit_list",
+                "repository_path": str(repository),
+                "head_ref": head_sha,
+                "base_ref": base_sha,
+                "user_config_path": str(commit_user_path),
+                "module_config_path": str(commit_module_path),
+                "output_path": str(commit_output_path),
+            }
+            commit_runtime_path.write_text(
+                json.dumps(commit_runtime),
+                encoding="utf-8",
+            )
+
             smoke_script = textwrap.dedent(
                 """
                 import os
@@ -168,6 +230,38 @@ class WheelBackendConfigurationTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(smoke_result.returncode, 0, smoke_result.stderr)
+
+            git_executable = shutil.which("git")
+            self.assertIsNotNone(git_executable)
+            git_only_bin = root / "git-only-bin"
+            git_only_bin.mkdir()
+            (git_only_bin / "git").symlink_to(git_executable)
+            cli_environment = {
+                name: value
+                for name, value in environment.items()
+                if "API_KEY" not in name.upper()
+            }
+            cli_environment["PATH"] = str(git_only_bin)
+            cli_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "release_notes_generator",
+                    "--config",
+                    str(commit_runtime_path),
+                ],
+                cwd=commit_list_root,
+                env=cli_environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(cli_result.returncode, 0, cli_result.stderr)
+            self.assertEqual(commit_output_path.read_bytes()[:5], b"%PDF-")
+            self.assertNotIn("ai_config_path", commit_runtime)
+            self.assertNotIn("env_file_path", commit_runtime)
+            self.assertNotIn("temp_diff_dir", commit_runtime)
+            self.assertFalse((commit_list_root / "diffs").exists())
 
             metadata_path = next(
                 installed_directory.glob("change_log_summary-*.dist-info/METADATA")

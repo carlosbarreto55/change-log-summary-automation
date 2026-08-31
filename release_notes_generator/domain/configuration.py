@@ -16,6 +16,13 @@ class RepositoryUpdateMode(str, Enum):
     LEGACY_IN_PLACE_SYNC = "legacy_in_place_sync"
 
 
+class ReportMode(str, Enum):
+    """Supported release-document content modes."""
+
+    AI_SUMMARY = "ai_summary"
+    COMMIT_LIST = "commit_list"
+
+
 class AIBackend(str, Enum):
     """Supported summarization backends."""
 
@@ -89,8 +96,8 @@ class WorkflowConfiguration:
     repository_path: Path
     contributors: ContributorPolicy
     modules: ModulePolicy
-    ai: AISettings
-    temp_diff_dir: Path
+    ai: Optional[AISettings]
+    temp_diff_dir: Optional[Path]
     output_path: Path
     head_ref: str
     base_ref: Optional[str]
@@ -99,3 +106,4 @@ class WorkflowConfiguration:
     refresh_remote: Optional[str] = None
     refresh_refspecs: tuple[str, ...] = ()
     env_file_path: Optional[Path] = None
+    report_mode: ReportMode = ReportMode.AI_SUMMARY

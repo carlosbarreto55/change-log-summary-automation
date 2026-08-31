@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from release_notes_generator.domain.configuration import (
     ContributorPolicy,
     ModuleDefinition,
     ModulePolicy,
+    ReportMode,
     WorkflowConfiguration,
 )
 from release_notes_generator.domain.release_document import ReleaseDocument
@@ -19,6 +21,7 @@ from release_notes_generator.domain.repository import (
     RepositoryStatus,
 )
 from release_notes_generator.domain.summarization import SummarizationOutcome
+from release_notes_generator.services.errors import ConfigurationError
 from release_notes_generator.services.release_notes import ReleaseNotesService
 
 
@@ -114,6 +117,10 @@ class Collaborators:
         self.events.append("compose")
         return self.document
 
+    def compose_commit_list(self, modules, repository_name, accepted):
+        self.events.append("compose_commit_list")
+        return replace(self.document, title="Release Commit Report")
+
     def export(self, document, output_path):
         self.events.append("export")
         return output_path
@@ -167,6 +174,60 @@ class ReleaseNotesServiceTests(unittest.TestCase):
 
         self.assertEqual(collaborators.events[-1], "cleanup")
         self.assertEqual(collaborators.cleaned, (collaborators.artifact,))
+
+    def test_commit_list_branches_after_selection_without_diff_or_ai_work(self) -> None:
+        collaborators = Collaborators()
+        collaborators.config = replace(
+            collaborators.config,
+            ai=None,
+            temp_diff_dir=None,
+            env_file_path=None,
+            report_mode=ReportMode.COMMIT_LIST,
+        )
+        collaborators.paths_value = replace(
+            collaborators.paths_value,
+            temp_diff_dir=None,
+            configured_temp_diff_dir=None,
+        )
+        service = ReleaseNotesService(
+            collaborators, collaborators, collaborators, collaborators,
+            collaborators, collaborators, collaborators, collaborators,
+        )
+
+        output = service.generate(Path("workflow.json"))
+
+        self.assertEqual(output, Path("/analysis/release.pdf"))
+        self.assertEqual(
+            collaborators.events,
+            [
+                "configuration", "validate", "inspect", "update", "freeze",
+                "extract", "select", "prepare", "compose_commit_list",
+                "revalidate", "export",
+            ],
+        )
+        self.assertFalse(hasattr(collaborators, "cleaned"))
+
+    def test_ai_summary_requires_ai_settings_and_temporary_diff_path(self) -> None:
+        cases = (
+            {"ai": None},
+            {"temp_diff_dir": None},
+        )
+        for missing_value in cases:
+            with self.subTest(missing_value=missing_value):
+                collaborators = Collaborators()
+                collaborators.config = replace(collaborators.config, **missing_value)
+                service = ReleaseNotesService(
+                    collaborators, collaborators, collaborators, collaborators,
+                    collaborators, collaborators, collaborators, collaborators,
+                )
+
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    "ai_summary mode requires AI settings and a temporary diff path",
+                ):
+                    service.generate(Path("workflow.json"))
+
+                self.assertEqual(collaborators.events, ["configuration"])
 
 
 if __name__ == "__main__":

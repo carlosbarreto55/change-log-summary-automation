@@ -7,6 +7,7 @@ from pathlib import Path
 
 from release_notes_generator.domain.configuration import (
     AIBackend,
+    ReportMode,
     RepositoryUpdateMode,
 )
 from release_notes_generator.infrastructure.json_reader import FileJSONReader
@@ -57,14 +58,21 @@ class CommittedRuntimeConfigurationTests(unittest.TestCase):
                     config.base_ref is None,
                     config.release_marker is None,
                 )
-                self.assertNotEqual(
-                    config.temp_diff_dir,
-                    config.repository_path,
-                )
-                self.assertNotIn(
-                    config.repository_path,
-                    config.temp_diff_dir.parents,
-                )
+                if config.report_mode is ReportMode.AI_SUMMARY:
+                    self.assertIsNotNone(config.temp_diff_dir)
+                    temp_diff_dir = config.temp_diff_dir
+                    if temp_diff_dir is None:
+                        raise AssertionError("AI runtime must retain its diff path.")
+                    self.assertNotEqual(temp_diff_dir, config.repository_path)
+                    self.assertNotIn(config.repository_path, temp_diff_dir.parents)
+                else:
+                    raw = json.loads(runtime_path.read_text(encoding="utf-8"))
+                    self.assertIsNone(config.ai)
+                    self.assertIsNone(config.env_file_path)
+                    self.assertIsNone(config.temp_diff_dir)
+                    self.assertNotIn("ai_config_path", raw)
+                    self.assertNotIn("env_file_path", raw)
+                    self.assertNotIn("temp_diff_dir", raw)
                 if (
                     config.repository_update_mode
                     is not RepositoryUpdateMode.LEGACY_IN_PLACE_SYNC

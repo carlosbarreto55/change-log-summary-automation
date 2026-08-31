@@ -10,6 +10,7 @@ from release_notes_generator.domain.configuration import (
     ClaudeCodeAISettings,
     ModuleDefinition,
     OpenAICompatibleAISettings,
+    ReportMode,
     RepositoryUpdateMode,
 )
 from release_notes_generator.infrastructure.json_reader import FileJSONReader
@@ -154,6 +155,115 @@ def _runtime_config_data() -> dict[str, object]:
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_report_mode_values_are_explicit(self) -> None:
+        self.assertEqual(
+            tuple(mode.value for mode in ReportMode),
+            ("ai_summary", "commit_list"),
+        )
+
+    def test_load_runtime_config_defaults_missing_report_mode_to_ai_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_config_path = Path(temp_dir) / "workflow.json"
+            runtime_config_path.write_text(
+                json.dumps(_runtime_config_data()), encoding="utf-8"
+            )
+
+            configuration = load_runtime_config(runtime_config_path)
+
+        self.assertIs(configuration.report_mode, ReportMode.AI_SUMMARY)
+        self.assertIsNotNone(configuration.ai)
+        self.assertIsNotNone(configuration.temp_diff_dir)
+
+    def test_load_runtime_config_accepts_explicit_ai_summary_mode_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data = _runtime_config_data()
+            data["report_mode"] = "ai_summary"
+            runtime_config_path = Path(temp_dir) / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            configuration = load_runtime_config(runtime_config_path)
+
+        self.assertIs(configuration.report_mode, ReportMode.AI_SUMMARY)
+        self.assertIsInstance(configuration.ai, OpenAICompatibleAISettings)
+        self.assertEqual(
+            configuration.temp_diff_dir,
+            (Path(temp_dir) / "tmp" / "diffs").resolve(),
+        )
+
+    def test_load_runtime_config_accepts_commit_list_without_ai_or_diff_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data.pop("ai_config_path")
+            data.pop("temp_diff_dir")
+            runtime_config_path = Path(temp_dir) / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            configuration = load_runtime_config(runtime_config_path)
+
+        self.assertIs(configuration.report_mode, ReportMode.COMMIT_LIST)
+        self.assertIsNone(configuration.ai)
+        self.assertIsNone(configuration.temp_diff_dir)
+        self.assertIsNone(configuration.env_file_path)
+
+    def test_commit_list_ignores_unusable_ai_environment_and_diff_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data = _runtime_config_data()
+            data.update(
+                {
+                    "report_mode": "commit_list",
+                    "ai_config_path": "missing-ai.json",
+                    "env_file_path": {"not": "a path"},
+                    "temp_diff_dir": ["not", "a", "path"],
+                }
+            )
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            configuration = load_runtime_config(runtime_config_path)
+
+        self.assertFalse((root / "missing-ai.json").exists())
+        self.assertIs(configuration.report_mode, ReportMode.COMMIT_LIST)
+        self.assertIsNone(configuration.ai)
+        self.assertIsNone(configuration.temp_diff_dir)
+        self.assertIsNone(configuration.env_file_path)
+
+    def test_load_runtime_config_rejects_invalid_report_modes(self) -> None:
+        for mode in ("unknown", "", "   ", None, 7, True, []):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp_dir:
+                data = _runtime_config_data()
+                data["report_mode"] = mode
+                runtime_config_path = Path(temp_dir) / "workflow.json"
+                runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+                with self.assertRaises(ConfigurationError):
+                    load_runtime_config(runtime_config_path)
+
+    def test_explicit_ai_summary_still_requires_usable_ai_and_diff_fields(self) -> None:
+        invalid_fields = (
+            ("ai_config_path", None),
+            ("ai_config_path", ""),
+            ("temp_diff_dir", None),
+            ("temp_diff_dir", ""),
+        )
+        for field_name, value in invalid_fields:
+            with (
+                self.subTest(field=field_name, value=value),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                data = _runtime_config_data()
+                data["report_mode"] = "ai_summary"
+                if value is None:
+                    data.pop(field_name)
+                else:
+                    data[field_name] = value
+                runtime_config_path = Path(temp_dir) / "workflow.json"
+                runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+                with self.assertRaises(ConfigurationError):
+                    load_runtime_config(runtime_config_path)
+
     def test_load_user_config_reads_default_approved_author_emails(self) -> None:
         config = load_user_config()
 

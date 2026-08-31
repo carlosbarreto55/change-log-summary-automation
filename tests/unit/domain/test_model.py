@@ -11,7 +11,11 @@ from release_notes_generator.domain.configuration import (
     ModulePolicy,
     WorkflowConfiguration,
 )
-from release_notes_generator.domain.release_document import ReleaseDocument
+from release_notes_generator.domain.release_document import (
+    ReleaseCommitEntry,
+    ReleaseDocument,
+    ReleaseModuleCommitList,
+)
 from release_notes_generator.domain.repository import RepositoryRelation, RepositoryStatus
 
 
@@ -20,6 +24,24 @@ class DomainModelTests(unittest.TestCase):
         artifact = DiffArtifact("Payments", Path("diff.md"))
         with self.assertRaises(dataclasses.FrozenInstanceError):
             artifact.module_name = "Other"  # type: ignore[misc]
+
+    def test_commit_entry_and_commit_list_module_are_immutable(self) -> None:
+        entry = ReleaseCommitEntry(
+            "Pix: committed feature",
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        module = ReleaseModuleCommitList(
+            "Pix",
+            (entry,),
+            qualifying_change_count=1,
+            change_start_date=date(2026, 1, 3),
+            change_end_date=date(2026, 1, 3),
+        )
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            entry.subject = "changed"  # type: ignore[misc]
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            module.commits = ()  # type: ignore[misc]
 
     def test_repository_status_exposes_pure_dirty_and_freshness_behavior(self) -> None:
         status = RepositoryStatus(

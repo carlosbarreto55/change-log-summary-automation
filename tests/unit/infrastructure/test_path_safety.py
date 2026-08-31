@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 from unittest.mock import patch
 
-from release_notes_generator.domain.configuration import RepositoryUpdateMode
+from release_notes_generator.domain.configuration import ReportMode, RepositoryUpdateMode
 from release_notes_generator.infrastructure.path_safety import (
     PathSafetyAdapter,
     validate_analysis_paths,
@@ -36,12 +36,23 @@ class RepositorySafetyTests(unittest.TestCase):
         output_path: Path,
         mode: object = RepositoryUpdateMode.READ_ONLY,
         repository_path: Optional[Path] = None,
+        report_mode: object = ReportMode.AI_SUMMARY,
     ):
         return validate_analysis_paths(
             repository_path=repository_path or self.repository,
             temp_diff_dir=temp_diff_dir,
             output_path=output_path,
             repository_update_mode=mode,
+            report_mode=report_mode,
+        )
+
+    def validate_commit_list(self, output_path: Path):
+        return validate_analysis_paths(
+            repository_path=self.repository,
+            temp_diff_dir=None,
+            output_path=output_path,
+            repository_update_mode=RepositoryUpdateMode.READ_ONLY,
+            report_mode=ReportMode.COMMIT_LIST,
         )
 
     def test_accepts_canonical_external_paths_and_returns_immutable_value(self) -> None:
@@ -61,6 +72,59 @@ class RepositorySafetyTests(unittest.TestCase):
         self.assertEqual(paths.output_path, output_path.resolve())
         with self.assertRaises(FrozenInstanceError):
             paths.temp_diff_dir = self.repository  # type: ignore[misc]
+
+    def test_ai_summary_still_requires_and_validates_temporary_paths(self) -> None:
+        with self.assertRaisesRegex(
+            RepositorySafetyError, "Temporary analysis path"
+        ):
+            validate_analysis_paths(
+                repository_path=self.repository,
+                temp_diff_dir=None,
+                output_path=self.external / "release.pdf",
+                repository_update_mode=RepositoryUpdateMode.READ_ONLY,
+                report_mode=ReportMode.AI_SUMMARY,
+            )
+
+        with self.assertRaisesRegex(
+            RepositorySafetyError, "Temporary analysis path"
+        ):
+            self.validate(
+                self.repository / "diffs",
+                self.external / "release.pdf",
+                report_mode=ReportMode.AI_SUMMARY,
+            )
+
+    def test_commit_list_validates_only_the_pdf_destination(self) -> None:
+        output_path = self.external / "output" / "release.pdf"
+
+        paths = self.validate_commit_list(output_path)
+
+        self.assertIsNone(paths.temp_diff_dir)
+        self.assertIsNone(paths.configured_temp_diff_dir)
+        self.assertEqual(paths.output_path, output_path.resolve())
+
+    def test_commit_list_prepare_and_revalidate_create_only_output_parent(self) -> None:
+        output_path = self.external / "output" / "release.pdf"
+        paths = self.validate_commit_list(output_path)
+
+        prepared = self.adapter.prepare(paths)
+        revalidated = self.adapter.revalidate(prepared)
+
+        self.assertIs(revalidated, paths)
+        self.assertTrue(output_path.parent.is_dir())
+        self.assertEqual(tuple(self.external.iterdir()), (output_path.parent,))
+        self.assertFalse(output_path.exists())
+
+    def test_commit_list_revalidation_rejects_output_alias_into_worktree(self) -> None:
+        output_path = self.external / "alias" / "release.pdf"
+        paths = self.validate_commit_list(output_path)
+        self.external.mkdir()
+        (self.external / "alias").symlink_to(
+            self.repository, target_is_directory=True
+        )
+
+        with self.assertRaisesRegex(RepositorySafetyError, "Final output path"):
+            self.adapter.revalidate(paths)
 
     def test_resolves_git_top_level_with_optional_locks_disabled(self) -> None:
         completed_process = subprocess.CompletedProcess(

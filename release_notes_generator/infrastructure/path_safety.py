@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from release_notes_generator.domain.analysis import AnalysisPaths
 from release_notes_generator.domain.configuration import WorkflowConfiguration
@@ -21,6 +21,7 @@ class PathSafetyAdapter:
             configuration.temp_diff_dir,
             configuration.output_path,
             configuration.repository_update_mode,
+            configuration.report_mode,
         )
 
     def revalidate(self, paths: AnalysisPaths) -> AnalysisPaths:
@@ -38,7 +39,8 @@ class PathSafetyAdapter:
 
     def prepare(self, paths: AnalysisPaths) -> AnalysisPaths:
         try:
-            paths.temp_diff_dir.mkdir(parents=True, exist_ok=True)
+            if paths.temp_diff_dir is not None:
+                paths.temp_diff_dir.mkdir(parents=True, exist_ok=True)
             paths.output_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise RepositorySafetyError(
@@ -49,13 +51,13 @@ class PathSafetyAdapter:
 
 def validate_analysis_paths(
     repository_path: Path,
-    temp_diff_dir: Path,
+    temp_diff_dir: Optional[Path],
     output_path: Path,
     repository_update_mode: Any,
+    report_mode: Any = "ai_summary",
 ) -> AnalysisPaths:
     """Resolve the worktree root and validate analysis destinations without writes."""
     repository_root = _resolve_repository_root(Path(repository_path))
-    configured_temp_diff_dir = _absolute_path(Path(temp_diff_dir))
     configured_output_path = _absolute_path(Path(output_path))
     mode_value = getattr(repository_update_mode, "value", repository_update_mode)
     valid_modes = {
@@ -67,6 +69,20 @@ def validate_analysis_paths(
         raise RepositorySafetyError(
             f"Unsupported repository update mode for path validation: {mode_value!r}."
         )
+
+    report_mode_value = getattr(report_mode, "value", report_mode)
+    if report_mode_value not in {"ai_summary", "commit_list"}:
+        raise RepositorySafetyError(
+            f"Unsupported report mode for path validation: {report_mode_value!r}."
+        )
+    if report_mode_value == "ai_summary":
+        if temp_diff_dir is None:
+            raise RepositorySafetyError(
+                "Temporary analysis path is required for ai_summary mode."
+            )
+        configured_temp_diff_dir = _absolute_path(Path(temp_diff_dir))
+    else:
+        configured_temp_diff_dir = None
 
     protect_output = mode_value != "legacy_in_place_sync"
     canonical_temp_diff_dir, canonical_output_path = _validate_destinations(
@@ -127,23 +143,25 @@ def _resolve_repository_root(repository_path: Path) -> Path:
 
 def _validate_destinations(
     repository_root: Path,
-    configured_temp_diff_dir: Path,
+    configured_temp_diff_dir: Optional[Path],
     configured_output_path: Path,
     protect_output: bool,
-) -> tuple[Path, Path]:
-    temp_diff_dir = _canonical_path(
-        configured_temp_diff_dir,
-        "Temporary analysis path",
-    )
-    _reject_worktree_path(
-        temp_diff_dir,
-        repository_root,
-        "Temporary analysis path",
-    )
-    _require_usable_directory_destination(
-        temp_diff_dir,
-        "Temporary analysis path",
-    )
+) -> tuple[Optional[Path], Path]:
+    temp_diff_dir = None
+    if configured_temp_diff_dir is not None:
+        temp_diff_dir = _canonical_path(
+            configured_temp_diff_dir,
+            "Temporary analysis path",
+        )
+        _reject_worktree_path(
+            temp_diff_dir,
+            repository_root,
+            "Temporary analysis path",
+        )
+        _require_usable_directory_destination(
+            temp_diff_dir,
+            "Temporary analysis path",
+        )
 
     output_path = _canonical_path(configured_output_path, "Final output path")
     if protect_output:
