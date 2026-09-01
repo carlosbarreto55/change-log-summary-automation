@@ -47,10 +47,26 @@ class ModuleDefinition:
 
 
 @dataclass(frozen=True)
+class TaskPatternConfig:
+    r"""Optional custom task reference patterns.
+
+    Attributes:
+        wlt: Regex pattern for WLT tasks (default: r"\bWLT-(\d+)\b")
+        wltm: Regex pattern for WLTM tasks (default: r"\bWLTM-(\d+)\b")
+        plm: Regex pattern for PLM references (default: r"\bP(\d{6})-(\d+)\b")
+    """
+
+    wlt: Optional[str] = None
+    wltm: Optional[str] = None
+    plm: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ModulePolicy:
     """Ordered module classification definitions."""
 
     modules: tuple[ModuleDefinition, ...]
+    task_patterns: Optional[TaskPatternConfig] = None
 
     @property
     def module_tags(self) -> Mapping[str, tuple[str, ...]]:

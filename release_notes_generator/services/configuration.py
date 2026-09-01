@@ -14,6 +14,7 @@ from release_notes_generator.domain.configuration import (
     OpenAICompatibleAISettings,
     ReportMode,
     RepositoryUpdateMode,
+    TaskPatternConfig,
     WorkflowConfiguration,
 )
 from release_notes_generator.services.contracts import JSONReader
@@ -124,7 +125,69 @@ def _module_policy(data: Mapping[str, Any]) -> ModulePolicy:
                 "Each module configuration entry must define a section."
             )
         definitions.append(ModuleDefinition(name, tuple(tags), section))
-    return ModulePolicy(tuple(definitions))
+
+    # Load optional task patterns configuration
+    task_patterns = None
+    if "task_patterns" in data:
+        task_patterns_data = data["task_patterns"]
+        if not isinstance(task_patterns_data, dict):
+            raise ConfigurationError(
+                "Module configuration task_patterns must be an object."
+            )
+
+        # Validate and extract pattern strings
+        wlt = None
+        wltm = None
+        plm = None
+
+        if "wlt" in task_patterns_data:
+            wlt = task_patterns_data["wlt"]
+            if not isinstance(wlt, str) or not wlt:
+                raise ConfigurationError(
+                    "Task pattern 'wlt' must be a non-empty string."
+                )
+            # Validate regex compiles
+            try:
+                import re
+                re.compile(wlt)
+            except re.error as exc:
+                raise ConfigurationError(
+                    f"Task pattern 'wlt' is not a valid regex: {exc}"
+                ) from exc
+
+        if "wltm" in task_patterns_data:
+            wltm = task_patterns_data["wltm"]
+            if not isinstance(wltm, str) or not wltm:
+                raise ConfigurationError(
+                    "Task pattern 'wltm' must be a non-empty string."
+                )
+            try:
+                import re
+                re.compile(wltm)
+            except re.error as exc:
+                raise ConfigurationError(
+                    f"Task pattern 'wltm' is not a valid regex: {exc}"
+                ) from exc
+
+        if "plm" in task_patterns_data:
+            plm = task_patterns_data["plm"]
+            if not isinstance(plm, str) or not plm:
+                raise ConfigurationError(
+                    "Task pattern 'plm' must be a non-empty string."
+                )
+            try:
+                import re
+                re.compile(plm)
+            except re.error as exc:
+                raise ConfigurationError(
+                    f"Task pattern 'plm' is not a valid regex: {exc}"
+                ) from exc
+
+        # Only create TaskPatternConfig if at least one pattern is defined
+        if wlt is not None or wltm is not None or plm is not None:
+            task_patterns = TaskPatternConfig(wlt=wlt, wltm=wltm, plm=plm)
+
+    return ModulePolicy(tuple(definitions), task_patterns=task_patterns)
 
 
 def _release_marker(data: Mapping[str, Any]) -> str:

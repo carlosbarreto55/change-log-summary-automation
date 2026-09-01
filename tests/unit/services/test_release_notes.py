@@ -113,11 +113,11 @@ class Collaborators:
         self.events.append("summarize")
         return SummarizationOutcome((("Pay", "- summary"),), None)
 
-    def compose(self, summaries, modules, repository_name, accepted):
+    def compose(self, summaries, modules, repository_name, accepted, task_patterns=None):
         self.events.append("compose")
         return self.document
 
-    def compose_commit_list(self, modules, repository_name, accepted):
+    def compose_commit_list(self, modules, repository_name, accepted, task_patterns=None):
         self.events.append("compose_commit_list")
         return replace(self.document, title="Release Commit Report")
 

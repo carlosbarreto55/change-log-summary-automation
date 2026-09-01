@@ -62,6 +62,8 @@ ranges, and ISO-week context.
 - Optional scoped remote-ref refresh and guarded legacy fetch/rebase modes.
 - Deterministic commit-list PDFs with exact subjects, full hashes, configured
   module order, and no author subgrouping.
+- Task-reference extraction from accepted commit subjects in both report modes,
+  with per-module occurrence counts and optional regular-expression overrides.
 - OpenAI-compatible and restricted Claude Code AI backends with bounded,
   ordered, module-isolated summarization and reduction requests.
 - Mode-specific path handling: `commit_list` prepares only the PDF destination;
@@ -444,6 +446,49 @@ appearance of each section. Empty modules and sections are omitted. If no
 commits qualify, either report contains `No qualifying changes.`; `ai_summary`
 does not initialize its configured backend in that case.
 
+### Task references
+
+Both report modes scan the accepted commit subjects for task references. By
+default, the recognized forms are `WLT-` followed by digits, `WLTM-` followed
+by digits, and `P` followed by six digits, a hyphen, and more digits. For
+example, `wifi: fix roaming for WLT-123 and P260820-05441` contributes one
+reference to each identifier under the commit's configured module.
+
+Repeated occurrences are counted for each `(reference ID, module)` pair. The
+PDF adds a `Task References` section after the configured module sections,
+groups the identifiers by module, and shows each count. The section is omitted
+when no accepted subject contains a recognized reference. This extraction is
+deterministic and independent of the AI backend.
+
+To replace the default patterns, add `task_patterns` beside `modules` in the
+module configuration:
+
+```json
+{
+  "modules": [
+    {
+      "name": "Wi-Fi",
+      "tags": ["wifi:"],
+      "section": "Networking"
+    }
+  ],
+  "task_patterns": {
+    "wlt": "\\bWLT-(\\d+)\\b",
+    "wltm": "\\bWLTM-(\\d+)\\b",
+    "plm": "\\bP(\\d{6})-(\\d+)\\b"
+  }
+}
+```
+
+The supported keys are `wlt`, `wltm`, and `plm`. Each configured value must be
+a non-empty valid regular expression. The `wlt` and `wltm` expressions must
+capture the identifier suffix in group 1; `plm` must capture the six-digit
+portion in group 1 and the suffix in group 2. Configuration fails before Git
+analysis if a pattern is invalid. Supplying one or more `task_patterns` values
+replaces the defaults: include every reference family to retain, because an
+omitted key is not matched. An empty `task_patterns` object behaves as though
+the object were omitted and therefore retains all defaults.
+
 ### Release boundary
 
 Marker mode uses a runtime selector:
@@ -606,6 +651,8 @@ Every final document contains:
     including the matched prefix, followed by an em dash and the complete Git
     object ID. Entries remain oldest first within each module and are not
     grouped by author.
+- When recognized identifiers occur, a final `Task References` section grouped
+  by module, with the occurrence count for every task or PLM identifier.
 
 For example, a report can show `2026-01-03 – 2026-02-02` as its exact range and `2026-W01 – 2026-W06` as supporting week context. A single date or week is shown once rather than repeated as a range. Author timestamps are normalized to UTC before ranges are calculated.
 

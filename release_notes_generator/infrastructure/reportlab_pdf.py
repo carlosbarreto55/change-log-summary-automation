@@ -22,6 +22,7 @@ from release_notes_generator.domain.release_document import (
     ReleaseDocument,
     ReleaseModuleCommitList,
     ReleaseModuleSummary,
+    TaskReferenceSection,
 )
 from release_notes_generator.services.errors import PDFGenerationError
 
@@ -117,6 +118,11 @@ def build_pdf_story(document: ReleaseDocument) -> List[Flowable]:
                 )
             story.append(Spacer(1, 3 * mm))
         story.append(Spacer(1, 3 * mm))
+
+    # Render task references section after all module sections
+    if document.task_reference_section is not None:
+        story.extend(_task_reference_flowables(document.task_reference_section, styles))
+
     return story
 
 
@@ -195,6 +201,52 @@ def _commit_flowables(
         )
         for entry in module.commits
     ]
+
+
+def _task_reference_flowables(
+    section: TaskReferenceSection,
+    styles: dict[str, ParagraphStyle],
+) -> List[Flowable]:
+    """Render task references section grouped by module with reference counts.
+
+    Format: ReferenceID (Module Name) - Count: N
+    """
+    flowables: List[Flowable] = []
+
+    # Add section title
+    flowables.append(Paragraph(html.escape(section.title), styles["section"]))
+    flowables.append(Spacer(1, 3 * mm))
+
+    # Group references by module for display
+    references_by_module: dict[str, list] = {}
+    for ref in section.references:
+        references_by_module.setdefault(ref.module_name, []).append(ref)
+
+    # Render each module's references
+    for module_name in sorted(references_by_module.keys()):
+        module_refs = references_by_module[module_name]
+        # Module name as a sub-heading
+        flowables.append(
+            Paragraph(html.escape(module_name), styles["module"])
+        )
+        flowables.append(Spacer(1, 2 * mm))
+
+        # Each reference as a bullet point
+        for ref in module_refs:
+            count_label = "reference" if ref.reference_count == 1 else "references"
+            flowable_text = (
+                f"{html.escape(ref.reference_id)} — Count: {ref.reference_count} {count_label}"
+            )
+            flowables.append(
+                Paragraph(
+                    flowable_text,
+                    styles["bullet"],
+                )
+            )
+
+        flowables.append(Spacer(1, 3 * mm))
+
+    return flowables
 
 
 def _register_fonts() -> None:
