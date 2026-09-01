@@ -3,6 +3,10 @@ from datetime import date, datetime
 
 from release_notes_generator.domain.configuration import ModuleDefinition, ModulePolicy
 from release_notes_generator.domain.release_document import (
+    DATABASE_CHANGES_SECTION_TITLE,
+    DatabaseChangeEntry,
+    DatabaseChangeModuleGroup,
+    DatabaseChangeSection,
     ReleaseCommitEntry,
     ReleaseDocument,
     ReleaseModuleCommitList,
@@ -10,6 +14,7 @@ from release_notes_generator.domain.release_document import (
     ReleaseSection,
 )
 from release_notes_generator.domain.repository import ClassifiedCommit
+from release_notes_generator.services.database_changes import DatabaseChangeMatch
 from release_notes_generator.services.release_document import ReleaseDocumentService
 
 
@@ -272,6 +277,244 @@ class ReleaseNotesCompositionTests(unittest.TestCase):
         self.assertIsNone(document.change_end_iso_week)
         self.assertEqual(document.sections, ())
         self.assertEqual(document.empty_message, "No qualifying changes.")
+
+
+class ReleaseNotesDatabaseChangeCompositionTests(unittest.TestCase):
+    """Tests for task 5: Document composition with database changes."""
+
+    def test_database_change_section_groups_by_module_in_configured_order(self) -> None:
+        """Test 5.1: Groups follow configured module order."""
+        pix_hash = "a" * 64
+        global_hash = "b" * 64
+        
+        commits = (
+            _commit_with_details(
+                global_hash,
+                "GlobalLoyalty",
+                "GL: update schema",
+                "dev@example.com",
+                "2026-01-04T01:00:00+00:00",
+            ),
+            _commit_with_details(
+                pix_hash,
+                "Pix",
+                "Pix: add migration",
+                "dev@example.com",
+                "2026-01-03T23:30:00+00:00",
+            ),
+        )
+        
+        database_matches = (
+            DatabaseChangeMatch(
+                commit=commits[1],  # Pix commit (older)
+                matched_paths=("db/pix/schema.sql",),
+            ),
+            DatabaseChangeMatch(
+                commit=commits[0],  # GlobalLoyalty commit (newer)
+                matched_paths=("db/global/config.sql",),
+            ),
+        )
+        
+        document = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+            database_matches=database_matches,
+        )
+        
+        self.assertIsNotNone(document.database_change_section)
+        section = document.database_change_section
+        self.assertEqual(section.title, DATABASE_CHANGES_SECTION_TITLE)
+        
+        # Groups should be in configured module order: GlobalLoyalty comes before Pix
+        self.assertEqual(len(section.groups), 2)
+        self.assertEqual(section.groups[0].name, "GlobalLoyalty")
+        self.assertEqual(section.groups[1].name, "Pix")
+        
+        # Within each group, commits should be in input order (oldest first)
+        self.assertEqual(len(section.groups[0].entries), 1)
+        self.assertEqual(section.groups[0].entries[0].subject, "GL: update schema")
+        self.assertEqual(section.groups[0].entries[0].commit_hash, global_hash)
+        
+        self.assertEqual(len(section.groups[1].entries), 1)
+        self.assertEqual(section.groups[1].entries[0].subject, "Pix: add migration")
+        self.assertEqual(section.groups[1].entries[0].commit_hash, pix_hash)
+
+    def test_database_change_section_omits_modules_with_no_matches(self) -> None:
+        """Test 5.1: A module with no match is omitted from database section."""
+        pix_hash = "a" * 64
+        
+        commits = (
+            _commit_with_details(
+                pix_hash,
+                "Pix",
+                "Pix: add migration",
+                "dev@example.com",
+                "2026-01-03T23:30:00+00:00",
+            ),
+        )
+        
+        # Only Pix has a match, TransitOpenLoop and GlobalLoyalty should be omitted
+        database_matches = (
+            DatabaseChangeMatch(
+                commit=commits[0],
+                matched_paths=("db/pix/schema.sql",),
+            ),
+        )
+        
+        document = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+            database_matches=database_matches,
+        )
+        
+        self.assertIsNotNone(document.database_change_section)
+        section = document.database_change_section
+        self.assertEqual(len(section.groups), 1)
+        self.assertEqual(section.groups[0].name, "Pix")
+
+    def test_database_change_section_preserves_commit_order_within_group(self) -> None:
+        """Test 5.1: Within-group commit order matches input order."""
+        pix_old_hash = "a" * 64
+        pix_new_hash = "b" * 64
+        
+        commits = (
+            _commit_with_details(
+                pix_old_hash,
+                "Pix",
+                "Pix: first migration",
+                "dev@example.com",
+                "2026-01-03T00:00:00+00:00",
+            ),
+            _commit_with_details(
+                pix_new_hash,
+                "Pix",
+                "Pix: second migration",
+                "dev@example.com",
+                "2026-01-04T00:00:00+00:00",
+            ),
+        )
+        
+        database_matches = (
+            DatabaseChangeMatch(
+                commit=commits[0],
+                matched_paths=("db/pix/first.sql",),
+            ),
+            DatabaseChangeMatch(
+                commit=commits[1],
+                matched_paths=("db/pix/second.sql",),
+            ),
+        )
+        
+        document = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+            database_matches=database_matches,
+        )
+        
+        self.assertIsNotNone(document.database_change_section)
+        section = document.database_change_section
+        self.assertEqual(len(section.groups), 1)
+        self.assertEqual(section.groups[0].name, "Pix")
+        
+        # Entries should be in input order (oldest first)
+        self.assertEqual(len(section.groups[0].entries), 2)
+        self.assertEqual(section.groups[0].entries[0].subject, "Pix: first migration")
+        self.assertEqual(section.groups[0].entries[1].subject, "Pix: second migration")
+
+    def test_empty_database_matches_produces_none_section(self) -> None:
+        """Test 5.2: Empty match set produces database_change_section is None."""
+        commits = (
+            _commit_with_details(
+                "a" * 64,
+                "Pix",
+                "Pix: change",
+                "dev@example.com",
+                "2026-01-03T00:00:00+00:00",
+            ),
+        )
+        
+        document = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+            database_matches=(),  # Empty matches
+        )
+        
+        self.assertIsNone(document.database_change_section)
+
+    def test_no_database_matches_produces_none_section(self) -> None:
+        """Test 5.2: Default (no database_matches arg) produces database_change_section is None."""
+        commits = (
+            _commit_with_details(
+                "a" * 64,
+                "Pix",
+                "Pix: change",
+                "dev@example.com",
+                "2026-01-03T00:00:00+00:00",
+            ),
+        )
+        
+        # Not passing database_matches at all (defaults to ())
+        document = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+        )
+        
+        self.assertIsNone(document.database_change_section)
+
+    def test_database_section_attachment_leaves_other_fields_identical(self) -> None:
+        """Test 5.3: Attaching section leaves other fields byte-identical."""
+        pix_hash = "a" * 64
+        
+        commits = (
+            _commit_with_details(
+                pix_hash,
+                "Pix",
+                "Pix: add migration",
+                "dev@example.com",
+                "2026-01-03T23:30:00+00:00",
+            ),
+        )
+        
+        # Document without database matches
+        document_without = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+        )
+        
+        # Document with database matches
+        database_matches = (
+            DatabaseChangeMatch(
+                commit=commits[0],
+                matched_paths=("db/pix/schema.sql",),
+            ),
+        )
+        
+        document_with = ReleaseDocumentService().compose_commit_list(
+            modules=_module_config(),
+            repository_name="linux",
+            accepted_commits=commits,
+            database_matches=database_matches,
+        )
+        
+        # These fields should be byte-identical
+        self.assertEqual(document_with.title, document_without.title)
+        self.assertEqual(document_with.repository_name, document_without.repository_name)
+        self.assertEqual(document_with.qualifying_change_count, document_without.qualifying_change_count)
+        self.assertEqual(document_with.change_start_date, document_without.change_start_date)
+        self.assertEqual(document_with.change_end_date, document_without.change_end_date)
+        self.assertEqual(document_with.sections, document_without.sections)
+        self.assertEqual(document_with.task_reference_section, document_without.task_reference_section)
+        self.assertEqual(document_with.empty_message, document_without.empty_message)
+        
+        # Only database_change_section should differ
+        self.assertIsNone(document_without.database_change_section)
+        self.assertIsNotNone(document_with.database_change_section)
 
 
 def _commit(commit_hash: str, module_name: str, authored_at: str) -> ClassifiedCommit:

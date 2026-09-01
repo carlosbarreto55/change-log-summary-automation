@@ -28,7 +28,7 @@ from release_notes_generator.infrastructure.git import (
 )
 from release_notes_generator.services.commit_selection import CommitSelectionService
 from release_notes_generator.services.diff_generation import DiffGenerationService
-from release_notes_generator.services.errors import GitHistoryError
+from release_notes_generator.services.errors import DiffGenerationError, GitHistoryError
 
 
 TEST_TIMESTAMP = datetime(2026, 1, 3, 12, 30, tzinfo=timezone.utc)
@@ -772,6 +772,96 @@ class CommitFilteringTests(unittest.TestCase):
 
         self.assertEqual(grouped, {"Pix": ("frozen-a", "frozen-b")})
         self.assertNotIn("HEAD", grouped["Pix"])
+
+
+class ChangedFilesTests(unittest.TestCase):
+    """Tests for GitAdapter.changed_files method (task 3.3)."""
+
+    def test_nul_separated_output_parses_to_expected_tuple(self) -> None:
+        """Verify NUL-separated output parses to the expected tuple."""
+        adapter = GitAdapter()
+        with patch("release_notes_generator.infrastructure.git.subprocess.run") as run:
+            run.return_value = _git_result(
+                stdout="file1.txt\x00file2.txt\x00dir/file3.txt\x00",
+                returncode=0,
+            )
+
+            result = adapter.changed_files(Path("/repo"), "abc123")
+
+        self.assertEqual(result, ("file1.txt", "file2.txt", "dir/file3.txt"))
+
+    def test_empty_output_yields_empty_tuple(self) -> None:
+        """Verify empty output yields an empty tuple."""
+        adapter = GitAdapter()
+        with patch("release_notes_generator.infrastructure.git.subprocess.run") as run:
+            run.return_value = _git_result(stdout="", returncode=0)
+
+            result = adapter.changed_files(Path("/repo"), "abc123")
+
+        self.assertEqual(result, ())
+
+    def test_non_ascii_path_round_trips_unescaped(self) -> None:
+        """Verify a non-ASCII path round-trips unescaped."""
+        adapter = GitAdapter()
+        with patch("release_notes_generator.infrastructure.git.subprocess.run") as run:
+            # Git returns NUL-separated UTF-8 paths
+            run.return_value = _git_result(
+                stdout="path/to/\u00e9cole.txt\x00",  # école.txt
+                returncode=0,
+            )
+
+            result = adapter.changed_files(Path("/repo"), "abc123")
+
+        self.assertEqual(result, ("path/to/\u00e9cole.txt",))
+
+    def test_failing_invocation_raises_git_history_error(self) -> None:
+        """Verify a failing invocation raises GitHistoryError."""
+        adapter = GitAdapter()
+        with patch("release_notes_generator.infrastructure.git.subprocess.run") as run:
+            run.return_value = _git_result(
+                stderr="fatal: bad object abc123",
+                returncode=128,
+            )
+
+            with self.assertRaisesRegex(GitHistoryError, "fatal: bad object abc123"):
+                adapter.changed_files(Path("/repo"), "abc123")
+
+    def test_single_file_change(self) -> None:
+        """Verify single file change returns single-element tuple."""
+        adapter = GitAdapter()
+        with patch("release_notes_generator.infrastructure.git.subprocess.run") as run:
+            run.return_value = _git_result(
+                stdout="single.txt\x00",
+                returncode=0,
+            )
+
+            result = adapter.changed_files(Path("/repo"), "abc123")
+
+        self.assertEqual(result, ("single.txt",))
+
+    def test_git_command_uses_correct_diff_tree_flags(self) -> None:
+        """Verify the exact diff-tree flag combination from design.md."""
+        adapter = GitAdapter()
+        with patch("release_notes_generator.infrastructure.git.subprocess.run") as run:
+            run.return_value = _git_result(stdout="", returncode=0)
+
+            adapter.changed_files(Path("/repo"), "abc123")
+
+        call_args = run.call_args_list[0].args[0]
+        expected_flags = [
+            "diff-tree",
+            "-r",
+            "-m",
+            "--first-parent",
+            "--root",
+            "--no-commit-id",
+            "--name-only",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "abc123",
+        ]
+        self.assertEqual(call_args[3:], expected_flags)
 
 
 if __name__ == "__main__":

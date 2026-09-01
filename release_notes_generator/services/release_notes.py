@@ -9,6 +9,7 @@ from release_notes_generator.domain.configuration import ReportMode
 from release_notes_generator.services.commit_selection import CommitSelectionService
 from release_notes_generator.services.configuration import ConfigurationService
 from release_notes_generator.services.contracts import PDFExporter, PathValidator
+from release_notes_generator.services.database_changes import DatabaseChangeDetectionService
 from release_notes_generator.services.diff_generation import DiffGenerationService
 from release_notes_generator.services.errors import ConfigurationError
 from release_notes_generator.services.release_document import (
@@ -48,6 +49,7 @@ class ReleaseNotesService:
         summarization: SummarizationService,
         documents: ReleaseDocumentService,
         pdf: PDFExporter,
+        database_detection: DatabaseChangeDetectionService,
         warning_handler: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._configuration = configuration
@@ -58,6 +60,7 @@ class ReleaseNotesService:
         self._summarization = summarization
         self._documents = documents
         self._pdf = pdf
+        self._database_detection = database_detection
         self._warning_handler = warning_handler
 
     def step_names(self) -> list[str]:
@@ -92,11 +95,18 @@ class ReleaseNotesService:
             task_patterns = build_task_patterns_from_config(
                 configuration.modules.task_patterns
             )
+            # Detect database changes only if policy is configured
+            database_matches = self._database_detection.detect(
+                paths.repository_root,
+                accepted,
+                configuration.database_paths,
+            )
             document = self._documents.compose_commit_list(
                 configuration.modules,
                 paths.repository_root.name,
                 accepted,
                 task_patterns,
+                database_matches,
             )
             paths = self._paths.revalidate(paths)
             return self._pdf.export(document, paths.output_path)

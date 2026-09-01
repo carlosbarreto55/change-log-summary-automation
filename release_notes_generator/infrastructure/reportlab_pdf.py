@@ -19,6 +19,9 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Flowable, Paragraph, SimpleDocTemplate, Spacer
 
 from release_notes_generator.domain.release_document import (
+    DatabaseChangeEntry,
+    DatabaseChangeModuleGroup,
+    DatabaseChangeSection,
     ReleaseDocument,
     ReleaseModuleCommitList,
     ReleaseModuleSummary,
@@ -122,6 +125,10 @@ def build_pdf_story(document: ReleaseDocument) -> List[Flowable]:
     # Render task references section after all module sections
     if document.task_reference_section is not None:
         story.extend(_task_reference_flowables(document.task_reference_section, styles))
+
+    # Render database changes section after task references
+    if document.database_change_section is not None:
+        story.extend(_database_change_flowables(document.database_change_section, styles))
 
     return story
 
@@ -249,6 +256,60 @@ def _task_reference_flowables(
     return flowables
 
 
+def _database_change_flowables(
+    section: DatabaseChangeSection,
+    styles: dict[str, ParagraphStyle],
+) -> List[Flowable]:
+    """Render database changes section with groups organized by module.
+
+    Format:
+    Database Changes (section heading)
+    Module Name (module sub-heading)
+    • commit subject — full-object-id
+      path/to/file1
+      path/to/file2
+    """
+    if not section.groups:
+        return []
+
+    flowables: List[Flowable] = []
+
+    # Add section title
+    flowables.append(Paragraph(html.escape(section.title), styles["section"]))
+    flowables.append(Spacer(1, 3 * mm))
+
+    # Render each module group
+    for group in section.groups:
+        # Module name as a sub-heading
+        flowables.append(Paragraph(html.escape(group.name), styles["module"]))
+        flowables.append(Spacer(1, 2 * mm))
+
+        # Each commit entry as a bullet point with paths beneath
+        for entry in group.entries:
+            # Commit line: subject — full object ID
+            commit_line = (
+                f'{html.escape(entry.subject)} — '
+                f'<font name="{_FONT_MONO}">{html.escape(entry.commit_hash)}</font>'
+            )
+            flowables.append(
+                Paragraph(
+                    commit_line,
+                    styles["commit"],
+                    bulletText="•",
+                )
+            )
+
+            # Paths beneath the commit, indented
+            for path in entry.matched_paths:
+                flowables.append(
+                    Paragraph(html.escape(path), styles["path"])
+                )
+
+        flowables.append(Spacer(1, 3 * mm))
+
+    return flowables
+
+
 def _register_fonts() -> None:
     if _FONT_REGULAR in pdfmetrics.getRegisteredFontNames():
         return
@@ -329,6 +390,16 @@ def _document_styles() -> dict[str, ParagraphStyle]:
             bulletIndent=0,
             leading=14,
             spaceAfter=4,
+        ),
+        "path": ParagraphStyle(
+            "ReleasePath",
+            parent=sample["BodyText"],
+            fontName=_FONT_MONO,
+            leftIndent=24,
+            firstLineIndent=0,
+            bulletIndent=0,
+            leading=12,
+            spaceAfter=2,
         ),
     }
 

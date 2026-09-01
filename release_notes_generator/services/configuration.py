@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -9,6 +10,7 @@ from release_notes_generator.domain.configuration import (
     AIBackend,
     ClaudeCodeAISettings,
     ContributorPolicy,
+    DatabasePathPolicy,
     ModuleDefinition,
     ModulePolicy,
     OpenAICompatibleAISettings,
@@ -75,6 +77,16 @@ class ConfigurationService:
         if ai_path is not None:
             ai = _ai_settings(self._json_reader.read_object(ai_path))
 
+        database_paths: Optional[DatabasePathPolicy] = None
+        if report_mode is ReportMode.COMMIT_LIST:
+            database_paths_config_path = _optional_path(
+                runtime, "database_paths_config_path", base_dir
+            )
+            if database_paths_config_path is not None:
+                database_paths = _database_path_policy(
+                    self._json_reader.read_object(database_paths_config_path)
+                )
+
         return WorkflowConfiguration(
             repository_path=repository_path,
             contributors=contributors,
@@ -90,6 +102,7 @@ class ConfigurationService:
             refresh_refspecs=refresh_refspecs,
             env_file_path=env_file_path,
             report_mode=report_mode,
+            database_paths=database_paths,
         )
 
 
@@ -384,3 +397,60 @@ def _resolve_path(value: str, base_dir: Path) -> Path:
     if path.is_absolute():
         return path.resolve(strict=False)
     return (base_dir / path).resolve(strict=False)
+
+
+def _validate_database_path(path: str) -> None:
+    """Reject a database path that is not repository-relative or cannot match."""
+    if re.match(r"^[A-Za-z]:", path):
+        raise ConfigurationError(
+            f"Database path must be repository-relative; absolute Windows path not allowed: {path}"
+        )
+    if "\\" in path:
+        raise ConfigurationError(
+            f"Database path must use forward slashes; backslash not allowed: {path}"
+        )
+    if path.startswith("/"):
+        raise ConfigurationError(
+            f"Database path must be repository-relative; absolute path not allowed: {path}"
+        )
+    for segment in path.split("/"):
+        if not segment or segment != segment.strip():
+            raise ConfigurationError(
+                f"Database path must not contain empty or padded segments; "
+                f"found '{segment}' in: {path}"
+            )
+        if segment in (".", ".."):
+            raise ConfigurationError(
+                f"Database path must not contain traversal segments; found '{segment}' in: {path}"
+            )
+
+
+def _database_path_policy(data: Mapping[str, Any]) -> DatabasePathPolicy:
+    """Load and validate database path policy from JSON data."""
+    paths_value = data.get("paths")
+    if paths_value is None:
+        raise ConfigurationError(
+            "Database paths configuration must define a 'paths' key."
+        )
+    if not isinstance(paths_value, list):
+        raise ConfigurationError(
+            "Database paths configuration 'paths' must be a list."
+        )
+
+    seen: set[str] = set()
+    validated: list[str] = []
+    for i, entry in enumerate(paths_value):
+        if not isinstance(entry, str):
+            raise ConfigurationError(
+                f"Database paths configuration entry {i} must be a string."
+            )
+        if not entry.strip():
+            raise ConfigurationError(
+                f"Database paths configuration entry {i} must be non-blank."
+            )
+        _validate_database_path(entry)
+        if entry not in seen:
+            seen.add(entry)
+            validated.append(entry)
+
+    return DatabasePathPolicy(paths=tuple(validated))

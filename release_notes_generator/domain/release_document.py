@@ -80,6 +80,34 @@ class TaskReferenceSection:
     references: tuple[TaskReference, ...] = ()
 
 
+DATABASE_CHANGES_SECTION_TITLE = "Database Changes"
+
+
+@dataclass(frozen=True)
+class DatabaseChangeEntry:
+    """One database change entry with subject, commit hash, and matched paths."""
+
+    subject: str
+    commit_hash: str
+    matched_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DatabaseChangeModuleGroup:
+    """One module group within the database changes section."""
+
+    name: str
+    entries: tuple[DatabaseChangeEntry, ...]
+
+
+@dataclass(frozen=True)
+class DatabaseChangeSection:
+    """Database changes section with groups organized by module."""
+
+    title: str = DATABASE_CHANGES_SECTION_TITLE
+    groups: tuple[DatabaseChangeModuleGroup, ...] = ()
+
+
 @dataclass(frozen=True)
 class ReleaseDocument:
     """Ordered release-note content independent from an output format."""
@@ -92,6 +120,7 @@ class ReleaseDocument:
     sections: tuple[ReleaseSection, ...]
     task_reference_section: Optional[TaskReferenceSection] = None
     empty_message: Optional[str] = None
+    database_change_section: Optional[DatabaseChangeSection] = None
 
     @property
     def change_start_iso_week(self) -> Optional[str]:

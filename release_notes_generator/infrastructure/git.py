@@ -74,6 +74,31 @@ class GitAdapter:
             raise DiffGenerationError(_git_error_message(result))
         return result.stdout
 
+    def changed_files(self, repository_path: Path, commit_hash: str) -> tuple[str, ...]:
+        """Return repository-relative paths changed by one frozen commit hash."""
+        result = _run_read_only_git_process(
+            repository_path,
+            [
+                "diff-tree",
+                "-r",
+                "-m",
+                "--first-parent",
+                "--root",
+                "--no-commit-id",
+                "--name-only",
+                "-z",
+                "--no-ext-diff",
+                "--no-textconv",
+                commit_hash,
+            ],
+        )
+        if result.returncode != 0:
+            raise GitHistoryError(_git_error_message(result))
+        # Split on NUL and drop the trailing empty field from -z output
+        paths = result.stdout.split("\0")
+        return tuple(path for path in paths if path)
+
+
 def inspect_repository(
     repository_path: Path, analysis_head_ref: Optional[str] = None
 ) -> RepositoryStatus:

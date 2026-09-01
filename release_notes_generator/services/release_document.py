@@ -7,6 +7,10 @@ from typing import Iterable, Mapping, Optional
 
 from release_notes_generator.domain.configuration import ModulePolicy, TaskPatternConfig
 from release_notes_generator.domain.release_document import (
+    DATABASE_CHANGES_SECTION_TITLE,
+    DatabaseChangeEntry,
+    DatabaseChangeModuleGroup,
+    DatabaseChangeSection,
     ReleaseCommitEntry,
     ReleaseDocument,
     ReleaseModuleCommitList,
@@ -16,6 +20,7 @@ from release_notes_generator.domain.release_document import (
     TaskReferenceSection,
 )
 from release_notes_generator.domain.repository import ClassifiedCommit
+from release_notes_generator.services.database_changes import DatabaseChangeMatch
 
 # Default task reference patterns
 DEFAULT_TASK_PATTERNS = {
@@ -180,8 +185,20 @@ class ReleaseDocumentService:
         repository_name: str,
         accepted_commits: Iterable[ClassifiedCommit],
         task_patterns: Optional[dict[str, re.Pattern]] = None,
+        database_matches: tuple[DatabaseChangeMatch, ...] = (),
     ) -> ReleaseDocument:
-        """Compose configured modules from exact accepted commit metadata."""
+        """Compose configured modules from exact accepted commit metadata.
+        
+        Args:
+            modules: Module policy with configured modules and sections.
+            repository_name: Name of the repository.
+            accepted_commits: Classified commits to include.
+            task_patterns: Optional task pattern regexes.
+            database_matches: Optional database change matches. If empty, database_change_section is None.
+        
+        Returns:
+            ReleaseDocument with optional DatabaseChangeSection.
+        """
         commits = tuple(accepted_commits)
         commits_by_module: dict[str, list[ClassifiedCommit]] = {}
         for commit in commits:
@@ -219,6 +236,43 @@ class ReleaseDocumentService:
         if task_references:
             task_section = TaskReferenceSection(references=task_references)
 
+        # Build database change section from matches
+        database_change_section: Optional[DatabaseChangeSection] = None
+        if database_matches:
+            # Group matches by module name in configured module order
+            module_order = {mod.name: idx for idx, mod in enumerate(modules.modules)}
+            groups_by_module: dict[str, list[DatabaseChangeEntry]] = {}
+            
+            for match in database_matches:
+                module_name = match.commit.module_name
+                if module_name not in groups_by_module:
+                    groups_by_module[module_name] = []
+                groups_by_module[module_name].append(
+                    DatabaseChangeEntry(
+                        subject=match.commit.subject,
+                        commit_hash=match.commit.commit_hash,
+                        matched_paths=match.matched_paths,
+                    )
+                )
+            
+            # Build groups in configured module order
+            ordered_groups = tuple(
+                DatabaseChangeModuleGroup(
+                    name=module_name,
+                    entries=tuple(groups_by_module[module_name]),
+                )
+                for module_name in sorted(
+                    groups_by_module.keys(),
+                    key=lambda name: module_order.get(name, len(module_order)),
+                )
+            )
+            
+            if ordered_groups:
+                database_change_section = DatabaseChangeSection(
+                    title=DATABASE_CHANGES_SECTION_TITLE,
+                    groups=ordered_groups,
+                )
+
         change_start, change_end = _date_range(commits)
         return ReleaseDocument(
             title="Release Commit Report",
@@ -229,6 +283,7 @@ class ReleaseDocumentService:
             sections=sections,
             task_reference_section=task_section,
             empty_message=None if sections else "No qualifying changes.",
+            database_change_section=database_change_section,
         )
 
 

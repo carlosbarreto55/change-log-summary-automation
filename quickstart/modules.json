@@ -1,0 +1,19 @@
+{
+  "modules": [
+    {
+      "name": "Global Loyalty",
+      "tags": ["GlobalLoyalty"],
+      "section": "GlobalLoyalty"
+    },
+    {
+      "name": "openfinancebr",
+      "tags": ["Pix"],
+      "section": "Pix"
+    },
+    {
+      "name": "Transit Open Loop",
+      "tags": ["TransitOpenLoop"],
+      "section": "TransitOpenLoop"
+    }
+  ]
+}
