@@ -1,0 +1,11 @@
+{
+  "report_mode": "commit_list",
+  "repository_update_mode": "read_only",
+  "repository_path": "C:\\Projects\\SamsungPayApp",
+  "head_ref": "refs/heads/master",
+  "base_ref": "b3dd25135d7eb8019c747411a1c4de4193e3ac76",
+  "user_config_path": "users.json",
+  "module_config_path": "modules.json",
+  "database_paths_config_path": "database-paths.json",
+  "output_path": "C:\\Projects\\change-log-summary-automation\\output\\SPayRelease.pdf"
+}

@@ -47,6 +47,9 @@ class GitGateway(Protocol):
     def show(self, repository_path: Path, commit_hash: str) -> str:
         """Return the patch for one frozen commit hash."""
 
+    def changed_files(self, repository_path: Path, commit_hash: str) -> tuple[str, ...]:
+        """Return repository-relative paths changed by one frozen commit hash."""
+
 
 class PathValidator(Protocol):
     def validate(self, configuration: WorkflowConfiguration) -> AnalysisPaths:

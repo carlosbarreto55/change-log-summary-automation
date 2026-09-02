@@ -8,6 +8,7 @@ import dataclasses
 from release_notes_generator.domain.configuration import (
     AIBackend,
     ClaudeCodeAISettings,
+    DatabasePathPolicy,
     ModuleDefinition,
     OpenAICompatibleAISettings,
     ReportMode,
@@ -63,6 +64,18 @@ def load_runtime_config(config_path: Path):
             _resolved_reference(runtime_path, marker_value), {"marker": "[Release]"}
         )
     return ConfigurationService(FileJSONReader()).load(runtime_path)
+
+
+class _RecordingJSONReader:
+    """Delegates to FileJSONReader while recording every path it reads."""
+
+    def __init__(self) -> None:
+        self._delegate = FileJSONReader()
+        self.read_paths: list[Path] = []
+
+    def read_object(self, path: Path):
+        self.read_paths.append(Path(path).resolve(strict=False))
+        return self._delegate.read_object(path)
 
 
 def _load_component(config_path: Path, component: str):
@@ -890,6 +903,370 @@ class ConfigurationTests(unittest.TestCase):
 
             with self.assertRaises(ConfigurationError):
                 load_ai_config(config_path)
+
+    # Task 2.1: Path-shape validator tests
+    def test_database_path_rejects_windows_drive_letter_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["C:\\Projects\\SamsungPayApp\\vas\\globalloyalty\\database\\GlobalLoyaltyCardTableMigrationDispatcher.kt"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_backslash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas\\globalloyalty\\database\\PixDatabase.kt"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_leading_slash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["/absolute/posix/path.kt"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_trailing_slash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas/globalloyalty/database/"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_doubled_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas//database/PixDatabase.kt"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_trailing_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas/database/PixDatabase.kt "]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_padded_interior_segment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas/ ../x"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_leading_whitespace_before_slash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": [" /etc/passwd"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_rejects_dot_traversal_segment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas/../etc/passwd"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_path_accepts_valid_repository_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["vas/openfinancebr/src/main/java/com/samsung/android/spay/vas/openfinancebr/core/repository/domain/database/PixDatabase.kt"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_runtime_config(runtime_config_path)
+
+            self.assertIsNotNone(config.database_paths)
+            self.assertEqual(
+                config.database_paths.paths,
+                ("vas/openfinancebr/src/main/java/com/samsung/android/spay/vas/openfinancebr/core/repository/domain/database/PixDatabase.kt",),
+            )
+
+    # Task 2.2: Database path configuration reading tests
+    def test_database_paths_config_rejects_non_object_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text("[]", encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_paths_config_rejects_missing_paths_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(json.dumps({"other": "key"}), encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_paths_config_rejects_non_list_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(json.dumps({"paths": "not-a-list"}), encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_paths_config_rejects_non_string_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(json.dumps({"paths": ["valid", 42]}), encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_paths_config_rejects_blank_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(json.dumps({"paths": ["valid", ""]}), encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_database_paths_config_accepts_empty_list(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(json.dumps({"paths": []}), encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_runtime_config(runtime_config_path)
+
+            self.assertIsNotNone(config.database_paths)
+            self.assertEqual(config.database_paths.paths, ())
+
+    def test_database_paths_config_deduplicates_preserving_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text(
+                json.dumps({"paths": ["first.kt", "second.kt", "first.kt"]}),
+                encoding="utf-8",
+            )
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data["database_paths_config_path"] = "db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_runtime_config(runtime_config_path)
+
+            self.assertIsNotNone(config.database_paths)
+            self.assertEqual(config.database_paths.paths, ("first.kt", "second.kt"))
+
+    # Task 2.3: Runtime resolution tests
+    def test_commit_list_config_without_database_paths_field_loads_with_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data.pop("ai_config_path")
+            data.pop("temp_diff_dir")
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_runtime_config(runtime_config_path)
+
+            self.assertIsNone(config.database_paths)
+
+    def test_commit_list_config_with_missing_database_paths_file_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data.pop("ai_config_path")
+            data.pop("temp_diff_dir")
+            data["database_paths_config_path"] = "missing_db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ConfigurationError):
+                load_runtime_config(runtime_config_path)
+
+    def test_ai_summary_config_ignores_database_paths_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data = _runtime_config_data()
+            data["report_mode"] = "ai_summary"
+            data["database_paths_config_path"] = "missing_db_paths.json"
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_runtime_config(runtime_config_path)
+
+            self.assertIsNone(config.database_paths)
+
+    def test_ai_summary_config_with_malformed_database_paths_file_never_reads_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_paths_path = root / "db_paths.json"
+            db_paths_path.write_text("not json", encoding="utf-8")
+            data = _runtime_config_data()
+            data["report_mode"] = "ai_summary"
+            data["database_paths_config_path"] = "db_paths.json"
+            for field_name, content in (
+                ("user_config_path", _valid_user_data()),
+                ("module_config_path", _valid_module_data()),
+                ("ai_config_path", _openai_ai_config_data()),
+            ):
+                value = data.get(field_name)
+                if isinstance(value, str) and value.strip():
+                    _write_json_if_missing(_resolved_reference(root / "workflow.json", value), content)
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            spy_reader = _RecordingJSONReader()
+            config = ConfigurationService(spy_reader).load(runtime_config_path)
+
+            self.assertIsNone(config.database_paths)
+            self.assertNotIn(db_paths_path.resolve(strict=False), spy_reader.read_paths)
+
+    def test_commit_list_config_treats_explicit_null_database_paths_as_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data = _runtime_config_data()
+            data["report_mode"] = "commit_list"
+            data.pop("ai_config_path")
+            data.pop("temp_diff_dir")
+            data["database_paths_config_path"] = None
+            runtime_config_path = root / "workflow.json"
+            runtime_config_path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_runtime_config(runtime_config_path)
+
+            self.assertIsNone(config.database_paths)
 
 
 if __name__ == "__main__":

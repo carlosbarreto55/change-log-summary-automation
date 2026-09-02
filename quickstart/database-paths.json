@@ -1,0 +1,7 @@
+{
+  "paths": [
+    "vas/globalloyalty/src/main/java/com/samsung/android/spay/vas/globalloyalty/database/GlobalLoyaltyCardTableMigrationDispatcher.kt",
+    "vas/globalloyalty/src/main/java/com/samsung/android/spay/vas/globalloyalty/database/addfrompartner/local/LoyaltyFromPartnerDatabase.kt",
+    "vas/openfinancebr/src/main/java/com/samsung/android/spay/vas/openfinancebr/core/repository/domain/database/PixDatabase.kt"
+  ]
+}

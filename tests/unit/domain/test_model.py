@@ -12,6 +12,10 @@ from release_notes_generator.domain.configuration import (
     WorkflowConfiguration,
 )
 from release_notes_generator.domain.release_document import (
+    DATABASE_CHANGES_SECTION_TITLE,
+    DatabaseChangeEntry,
+    DatabaseChangeModuleGroup,
+    DatabaseChangeSection,
     ReleaseCommitEntry,
     ReleaseDocument,
     ReleaseModuleCommitList,
@@ -90,3 +94,41 @@ class DomainModelTests(unittest.TestCase):
         )
         self.assertEqual(configuration.modules.module_tags, {"Pay": ("PAY:",)})
         self.assertEqual(configuration.contributors.approved_author_emails, ("dev@example.com",))
+
+    def test_database_change_section_title_equals_database_changes(self) -> None:
+        section = DatabaseChangeSection()
+        self.assertEqual(section.title, "Database Changes")
+        self.assertEqual(section.title, DATABASE_CHANGES_SECTION_TITLE)
+
+    def test_database_change_types_are_frozen(self) -> None:
+        entry = DatabaseChangeEntry(
+            subject="Pix: add feature",
+            commit_hash="0123456789abcdef0123456789abcdef01234567",
+            matched_paths=("vas/globalloyalty/database/PixDatabase.kt",),
+        )
+        group = DatabaseChangeModuleGroup(
+            name="Pix",
+            entries=(entry,),
+        )
+        section = DatabaseChangeSection(
+            title="Database Changes",
+            groups=(group,),
+        )
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            entry.subject = "changed"  # type: ignore[misc]
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            group.name = "Other"  # type: ignore[misc]
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            section.title = "Other"  # type: ignore[misc]
+
+    def test_release_document_with_existing_style_construction(self) -> None:
+        document = ReleaseDocument(
+            "Release Notes",
+            "repository",
+            1,
+            date(2025, 12, 29),
+            date(2026, 1, 4),
+            (),
+        )
+        self.assertIsNone(document.database_change_section)

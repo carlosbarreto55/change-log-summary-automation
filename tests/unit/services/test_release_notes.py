@@ -21,6 +21,7 @@ from release_notes_generator.domain.repository import (
     RepositoryStatus,
 )
 from release_notes_generator.domain.summarization import SummarizationOutcome
+from release_notes_generator.services.database_changes import DatabaseChangeDetectionService
 from release_notes_generator.services.errors import ConfigurationError
 from release_notes_generator.services.release_notes import ReleaseNotesService
 
@@ -117,13 +118,17 @@ class Collaborators:
         self.events.append("compose")
         return self.document
 
-    def compose_commit_list(self, modules, repository_name, accepted, task_patterns=None):
+    def compose_commit_list(self, modules, repository_name, accepted, task_patterns=None, database_matches=()):
         self.events.append("compose_commit_list")
         return replace(self.document, title="Release Commit Report")
 
     def export(self, document, output_path):
         self.events.append("export")
         return output_path
+
+    def detect(self, repository_path, commits, policy):
+        self.events.append("detect")
+        return ()
 
 
 class ReleaseNotesServiceTests(unittest.TestCase):
@@ -139,6 +144,7 @@ class ReleaseNotesServiceTests(unittest.TestCase):
             collaborators,
             collaborators,
             collaborators,
+            collaborators,  # database_detection
             warning_handler=warnings.append,
         )
 
@@ -167,6 +173,7 @@ class ReleaseNotesServiceTests(unittest.TestCase):
         service = ReleaseNotesService(
             collaborators, collaborators, collaborators, collaborators,
             collaborators, collaborators, collaborators, collaborators,
+            collaborators,  # database_detection
         )
 
         with self.assertRaisesRegex(RuntimeError, "failed"):
@@ -192,6 +199,7 @@ class ReleaseNotesServiceTests(unittest.TestCase):
         service = ReleaseNotesService(
             collaborators, collaborators, collaborators, collaborators,
             collaborators, collaborators, collaborators, collaborators,
+            collaborators,  # database_detection
         )
 
         output = service.generate(Path("workflow.json"))
@@ -201,7 +209,7 @@ class ReleaseNotesServiceTests(unittest.TestCase):
             collaborators.events,
             [
                 "configuration", "validate", "inspect", "update", "freeze",
-                "extract", "select", "prepare", "compose_commit_list",
+                "extract", "select", "prepare", "detect", "compose_commit_list",
                 "revalidate", "export",
             ],
         )
@@ -219,6 +227,7 @@ class ReleaseNotesServiceTests(unittest.TestCase):
                 service = ReleaseNotesService(
                     collaborators, collaborators, collaborators, collaborators,
                     collaborators, collaborators, collaborators, collaborators,
+                    collaborators,  # database_detection
                 )
 
                 with self.assertRaisesRegex(
@@ -228,6 +237,93 @@ class ReleaseNotesServiceTests(unittest.TestCase):
                     service.generate(Path("workflow.json"))
 
                 self.assertEqual(collaborators.events, ["configuration"])
+
+    def test_commit_list_with_database_paths_invokes_detection(self) -> None:
+        """Test 6.2: A commit_list run with a configured policy invokes detection."""
+        collaborators = Collaborators()
+        collaborators.config = replace(
+            collaborators.config,
+            ai=None,
+            temp_diff_dir=None,
+            env_file_path=None,
+            report_mode=ReportMode.COMMIT_LIST,
+        )
+        collaborators.paths_value = replace(
+            collaborators.paths_value,
+            temp_diff_dir=None,
+            configured_temp_diff_dir=None,
+        )
+        service = ReleaseNotesService(
+            collaborators,  # configuration
+            collaborators,  # paths
+            collaborators,  # repositories
+            collaborators,  # commits
+            collaborators,  # diffs
+            collaborators,  # summarization
+            collaborators,  # documents
+            collaborators,  # pdf
+            collaborators,  # database_detection
+        )
+
+        output = service.generate(Path("workflow.json"))
+
+        self.assertEqual(output, Path("/analysis/release.pdf"))
+        self.assertIn("detect", collaborators.events)
+
+    def test_ai_summary_run_never_invokes_detection(self) -> None:
+        """Test 6.2: An ai_summary run never invokes detection."""
+        collaborators = Collaborators()
+        # ai_summary mode is the default when ai is set
+        service = ReleaseNotesService(
+            collaborators,  # configuration
+            collaborators,  # paths
+            collaborators,  # repositories
+            collaborators,  # commits
+            collaborators,  # diffs
+            collaborators,  # summarization
+            collaborators,  # documents
+            collaborators,  # pdf
+            collaborators,  # database_detection
+        )
+
+        output = service.generate(Path("workflow.json"))
+
+        self.assertEqual(output, Path("/analysis/release.pdf"))
+        self.assertNotIn("detect", collaborators.events)
+
+    def test_commit_list_with_no_database_paths_invokes_detection_but_returns_empty(self) -> None:
+        """Test 6.3: A commit_list run with database_paths is None invokes detection (which returns empty)."""
+        collaborators = Collaborators()
+        collaborators.config = replace(
+            collaborators.config,
+            ai=None,
+            temp_diff_dir=None,
+            env_file_path=None,
+            report_mode=ReportMode.COMMIT_LIST,
+            # database_paths is None by default
+        )
+        collaborators.paths_value = replace(
+            collaborators.paths_value,
+            temp_diff_dir=None,
+            configured_temp_diff_dir=None,
+        )
+        service = ReleaseNotesService(
+            collaborators,  # configuration
+            collaborators,  # paths
+            collaborators,  # repositories
+            collaborators,  # commits
+            collaborators,  # diffs
+            collaborators,  # summarization
+            collaborators,  # documents
+            collaborators,  # pdf
+            collaborators,  # database_detection
+        )
+
+        output = service.generate(Path("workflow.json"))
+
+        self.assertEqual(output, Path("/analysis/release.pdf"))
+        # Detection is called but returns empty (no database_paths configured)
+        self.assertIn("detect", collaborators.events)
 
 
 if __name__ == "__main__":

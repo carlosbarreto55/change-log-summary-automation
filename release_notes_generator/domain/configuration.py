@@ -106,6 +106,13 @@ AISettings = Union[OpenAICompatibleAISettings, ClaudeCodeAISettings]
 
 
 @dataclass(frozen=True)
+class DatabasePathPolicy:
+    """Configured repository-relative paths that represent database changes."""
+
+    paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class WorkflowConfiguration:
     """Validated configuration for one complete release-notes run."""
 
@@ -123,3 +130,4 @@ class WorkflowConfiguration:
     refresh_refspecs: tuple[str, ...] = ()
     env_file_path: Optional[Path] = None
     report_mode: ReportMode = ReportMode.AI_SUMMARY
+    database_paths: Optional[DatabasePathPolicy] = None

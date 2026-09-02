@@ -11,6 +11,7 @@ from release_notes_generator.infrastructure.reportlab_pdf import ReportLabPDFExp
 from release_notes_generator.services.commit_selection import CommitSelectionService
 from release_notes_generator.services.configuration import ConfigurationService
 from release_notes_generator.services.contracts import SummaryClient
+from release_notes_generator.services.database_changes import DatabaseChangeDetectionService
 from release_notes_generator.services.diff_generation import DiffGenerationService
 from release_notes_generator.services.release_document import ReleaseDocumentService
 from release_notes_generator.services.release_notes import ReleaseNotesService
@@ -36,5 +37,6 @@ def compose_release_notes_service(
         ),
         documents=ReleaseDocumentService(),
         pdf=ReportLabPDFExporter(),
+        database_detection=DatabaseChangeDetectionService(git),
         warning_handler=warning_handler,
     )
